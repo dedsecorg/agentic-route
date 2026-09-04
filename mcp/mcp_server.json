@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "agentic-route": {
+      "command": "/usr/local/bin/agentic-route",
+      "args": ["mcp"],
+      "env": {
+        "AGENTIC_ROUTE_CONF": "/etc/agentic-route/routes.json"
+      }
+    }
+  }
+}

@@ -1,0 +1,6 @@
+# agentic-route LLM Reference
+
+Declarative Linux kernel policy-routing reconciler. Reads routes.json and
+reconciles ip rule and ip route state. Commands: status, check, enforce,
+monitor, daemon, mcp, api. No route or rule flushes. MCP tools:
+route_status, route_check, route_enforce, route_monitor.

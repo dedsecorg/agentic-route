@@ -1,0 +1,16 @@
+[Unit]
+Description=agentic-route kernel policy routing reconciler
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/agentic-route monitor
+Restart=always
+CapabilityBoundingSet=CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN
+ProtectSystem=strict
+ReadWritePaths=/etc/agentic-route
+
+[Install]
+WantedBy=multi-user.target

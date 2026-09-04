@@ -1,0 +1,138 @@
+#!/bin/bash
+# agentic-route: declarative kernel policy-routing reconciler
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+AR_JSON="${AGENTIC_ROUTE_CONF:-/etc/agentic-route/routes.json}"
+export AR_JSON
+source "$SCRIPT_DIR/lib/core.sh"
+
+cmd_check() {
+    AR_DIFF_MODE=check
+    export AR_DIFF_MODE
+    local drift
+    drift=$(ar_apply_once)
+    [ "$drift" -eq 0 ]
+}
+
+cmd_enforce() {
+    AR_DIFF_MODE=enforce
+    export AR_DIFF_MODE
+    ar_apply_once >/dev/null
+}
+
+cmd_status() {
+    echo "agentic-route status"
+    echo "Spec: $AR_JSON"
+    echo ""
+    echo "--- Desired rules ---"
+    jq -r '.rules[]? | "  \(.prio): \(.selector) \(.action)"' "$AR_JSON" 2>/dev/null
+    echo "--- Live IPv4 rules ---"
+    ar_rule_get | sed 's/^/  /'
+    echo ""
+    echo "--- Desired pinned routes ---"
+    jq -r '.pinned_routes[]? | "  \(.dst) via \(.via // "-") dev \(.dev // "-")"' "$AR_JSON" 2>/dev/null
+    echo "--- Live IPv4 routes ---"
+    ar_route_get | sed 's/^/  /'
+    echo ""
+    echo "--- Drift ---"
+    AR_DIFF_MODE=check
+    export AR_DIFF_MODE
+    ar_apply_once >/dev/null
+}
+
+cmd_monitor() {
+    command -v ip >/dev/null 2>&1 || ar_die "ip command is required"
+    ar_log "baseline reconcile"
+    cmd_enforce
+    ar_log "monitoring kernel rule, route, and link events"
+    ip monitor rule route link 2>/dev/null | while IFS= read -r _event; do
+        sleep 0.2
+        cmd_enforce
+        while IFS= read -r -t 0 _event; do :; done
+    done
+}
+
+cmd_api() {
+    local port="${AGENTIC_ROUTE_API_PORT:-8099}"
+    if ! command -v socat >/dev/null 2>&1; then
+        ar_die "socat is required for api"
+    fi
+    ar_log "API listening on :$port"
+    while true; do
+        socat TCP-LISTEN:"$port",reuseaddr,fork SYSTEM:"$0 api-handler" 2>/dev/null
+    done
+}
+
+cmd_api_handler() {
+    local path
+    IFS=' ' read -r _ path _ || true
+    printf 'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n'
+    case "$path" in
+        /api/v1/status) cmd_status 2>&1 | jq -Rs '{status:"ok", text:.}' ;;
+        /api/v1/check) cmd_check >/dev/null 2>&1; printf '{"clean":%s}\n' "$([ "$?" -eq 0 ] && echo true || echo false)" ;;
+        /api/v1/enforce) cmd_enforce >/dev/null 2>&1; echo '{"enforced":true}' ;;
+        *) echo '{"error":"not found"}' ;;
+    esac
+}
+
+cmd_mcp() {
+    while IFS= read -r line || [ -n "$line" ]; do
+        [ -z "$line" ] && continue
+        local method req_id tool out
+        method=$(printf '%s' "$line" | jq -r '.method // empty' 2>/dev/null)
+        req_id=$(printf '%s' "$line" | jq -c '.id // 1' 2>/dev/null)
+        case "$method" in
+            initialize)
+                printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"agentic-route","version":"1.0.0"}}}\n' "$req_id" ;;
+            notifications/*) ;;
+            ping) printf '{"jsonrpc":"2.0","id":%s,"result":{}}\n' "$req_id" ;;
+            tools/list)
+                printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"route_status","description":"Show live and desired kernel routes","inputSchema":{"type":"object","properties":{},"required":[]}},{"name":"route_check","description":"Check for routing drift without mutation","inputSchema":{"type":"object","properties":{},"required":[]}},{"name":"route_enforce","description":"Reconcile kernel routing state","inputSchema":{"type":"object","properties":{},"required":[]}},{"name":"route_monitor","description":"Monitor kernel routing events","inputSchema":{"type":"object","properties":{},"required":[]}}]}}\n' "$req_id" ;;
+            tools/call)
+                tool=$(printf '%s' "$line" | jq -r '.params.name // empty' 2>/dev/null)
+                case "$tool" in
+                    route_status) out=$(cmd_status 2>&1) ;;
+                    route_check) if cmd_check 2>&1; then out="clean"; else out="drift detected"; fi ;;
+                    route_enforce) out=$(cmd_enforce 2>&1; echo "enforced") ;;
+                    route_monitor) out="monitor is a long-running command; use agentic-route monitor" ;;
+                    *) printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32601,"message":"Unknown tool"}}\n' "$req_id"; continue ;;
+                esac
+                printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":%s}]}}\n' "$req_id" "$(printf '%s' "$out" | jq -Rs .)" ;;
+            *) printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32601,"message":"Method not supported"}}\n' "$req_id" ;;
+        esac
+    done
+}
+
+cmd_help() {
+    cat <<'HELP'
+agentic-route: declarative kernel policy-routing reconciler
+
+Usage: agentic-route <command>
+
+Commands:
+  status    Show desired and live rules and routes
+  check     Report drift without changing kernel state
+  enforce   Apply surgical check-then-act reconciliation
+  monitor   Reconcile on ip monitor rule/route/link events
+  daemon    Alias for monitor
+  mcp       Start stdio MCP JSON-RPC server
+  api       Start local REST API server
+HELP
+}
+
+main() {
+    local cmd="${1:-enforce}"
+    case "$cmd" in
+        status) cmd_status ;;
+        check) cmd_check ;;
+        enforce) cmd_enforce ;;
+        monitor|daemon) cmd_monitor ;;
+        mcp) cmd_mcp ;;
+        api) cmd_api ;;
+        api-handler) cmd_api_handler ;;
+        help|-h|--help) cmd_help ;;
+        *) echo "Unknown command: $cmd" >&2; cmd_help; return 1 ;;
+    esac
+}
+main "$@"

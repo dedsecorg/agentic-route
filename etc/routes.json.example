@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "comment": "Hand-edit this declarative state specification. agentic-route reads it and never writes it.",
+  "rules": [
+    { "prio": 100, "selector": "from 192.0.2.10", "action": "lookup wan" },
+    { "prio": 1000, "selector": "from all fwmark 0x80000/0xff0000", "action": "lookup main" }
+  ],
+  "forbidden_rules": [
+    { "prio": 31580, "match": "suppress_prefixlength 0", "reason": "Remove a VPN capture rule only at this priority" },
+    { "match": "100.64.0.0/10 lookup main", "reason": "Do not let a VPN redirect mesh traffic through main" }
+  ],
+  "pinned_routes": [
+    { "dst": "198.51.100.7/32", "via": "192.0.2.1", "dev": "eth0", "reason": "Keep a VPN endpoint reachable outside the tunnel" },
+    { "dst": "default", "via": "192.0.2.1", "dev": "eth0", "reason": "Keep fallback egress present" }
+  ]
+}

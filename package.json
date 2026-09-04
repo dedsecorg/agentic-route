@@ -1,0 +1,15 @@
+{
+  "name": "agentic-route",
+  "version": "1.0.0",
+  "description": "Declarative kernel policy-routing reconciler for agentic systems",
+  "main": "bin/agentic-route",
+  "bin": {"agentic-route": "bin/agentic-route"},
+  "files": ["bin/agentic-route", "lib/core.sh", "etc/routes.json.example", "README.md", "LICENSE"],
+  "scripts": {"test": "./tests/test_cli.sh", "mcp": "bin/agentic-route mcp"},
+  "keywords": ["routing", "iproute2", "vpn", "policy-routing", "mcp", "agentic-ai"],
+  "author": "dedsecorg",
+  "license": "MIT",
+  "repository": {"type": "git", "url": "https://github.com/dedsecorg/agentic-route.git"},
+  "bugs": {"url": "https://github.com/dedsecorg/agentic-route/issues"},
+  "homepage": "https://github.com/dedsecorg/agentic-route#readme"
+}
