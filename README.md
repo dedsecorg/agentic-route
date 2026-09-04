@@ -138,3 +138,15 @@ All contributions are assumed to be redistributable under the same MIT license
 unless explicitly stated otherwise. By submitting a pull request you certify
 that you have the right to license the contribution and that it does not
 introduce security-sensitive material (private IPs, tokens, or keys).
+
+---
+
+## Installation via Smithery
+
+Install the MCP server directly into Claude Desktop, Cursor, or other Smithery-supported clients:
+
+```bash
+npx -y @smithery/cli install @dedsecorg/agentic-route
+```
+
+This provisions `agentic-route` with the correct `mcp` argument automatically.
