@@ -21,37 +21,37 @@ VPN daemons (NordVPN, ProtonVPN, Tailscale, WireGuard) fight over the kernel rou
 ## Architecture
 
 ```
-┌─────────────────────┐     inotifywait      ┌──────────────────┐
-│  /etc/agentic-route/│◄─────────────────────│  intent.json     │
-│  (directory watch)  │   (survives vim)     │  (user intent)   │
-└──────────┬──────────┘                      └──────────────────┘
-           │                                      ▲
-           │ events                               │ edit
-           ▼                                      │
-┌─────────────────────┐     ip monitor           │
-│   FIFO multiplexer  │◄─────────────────────────┘
-│  (exec 3<> "$FIFO") │   kernel Netlink
-└──────────┬──────────┘
-           │ 200ms debounce
-           ▼
-┌─────────────────────┐
-│  reconcile binary   │
-│  (idempotent)       │
-└──────────┬──────────┘
-           │ surgical ip rule/route
-           ▼
-┌─────────────────────┐
-│  Kernel routing     │
-│  tables + rules     │
-└─────────────────────┘
++---------------------+     inotifywait      +------------------+
+|  /etc/agentic-route/|<---------------------|  intent.json     |
+|  (directory watch)  |   (survives vim)     |  (user intent)   |
++----------+----------+                      +------------------+
+           |                                      ^
+           | events                               | edit
+           v                                      |
++---------------------+     ip monitor           |
+|   FIFO multiplexer  |<--------------------------+
+|  (exec 3<> "$FIFO") |   kernel Netlink
++----------+----------+
+           | 200ms debounce
+           v
++---------------------+
+|  reconcile binary   |
+|  (idempotent)       |
++----------+----------+
+           | surgical ip rule/route
+           v
++---------------------+
+|  Kernel routing     |
+|  tables + rules     |
++---------------------+
 ```
 
 **Hardened against 5 classic Bash daemon bugs:**
-- Subshell scope isolation → single consumer loop in main process
-- Netlink echo loop → idempotent reconcile + debounce
-- Burst storm (50 events/100ms) → `read -t 0.2` drains burst
-- inotify inode trap → directory watch survives `vim` atomic rename
-- FIFO EOF death → `exec 3<> "$FIFO"` holds pipe open permanently
+- Subshell scope isolation -> single consumer loop in main process
+- Netlink echo loop -> idempotent reconcile + debounce
+- Burst storm (50 events/100ms) -> `read -t 0.2` drains burst
+- inotify inode trap -> directory watch survives `vim` atomic rename
+- FIFO EOF death -> `exec 3<> "$FIFO"` holds pipe open permanently
 
 ---
 
@@ -120,7 +120,7 @@ npx -y @smithery/cli install @dedsecorg/agentic-route
 | `agentic-route enforce` | One-shot surgical reconciliation |
 | `agentic-route reconcile` | **Idempotent one-shot** (discovers + intent + applies) |
 | `agentic-route daemon` | **Event-driven daemon** (inotify + ip monitor + FIFO) |
-| `agentic-route monitor` | Legacy: `ip monitor \| while read` loop |
+| `agentic-route monitor` | Legacy: `ip monitor | while read` loop |
 | `agentic-route mcp` | Read-only stdio MCP JSON-RPC server |
 | `agentic-route api` | Local REST API server (port 8099) |
 
@@ -193,7 +193,7 @@ Mutation (`enforce`) deliberately **not exposed** — apply path stays a CLI/ope
 
 **Result:**
 - ProtonVPN never owns host egress (DNS only via `proton0`)
-- Tailscale mesh (100.64.0.0/10) → table 52, never main
+- Tailscale mesh (100.64.0.0/10) -> table 52, never main
 - NordVPN (fwmark 0xe1f1) owns default egress via table 205
 - Proton WG endpoint pinned via eth0 (tunnel never loses handshake)
 - Bare-metal default route survives VPN restarts
@@ -219,4 +219,3 @@ MIT — see [LICENSE](LICENSE).
 ## Related
 
 - **hermes-route** — private fork with real IPs, same engine
-- **agentic-dns** — DNS orchestration layer (Pi-hole → CoreDNS → dnsdist → Unbound)
