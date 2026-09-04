@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # agentic-route: declarative kernel policy-routing reconciler
 set -uo pipefail
 
@@ -27,6 +27,7 @@ cmd_status() {
     echo ""
     echo "--- Desired rules ---"
     jq -r '.rules[]? | "  \(.prio): \(.selector) \(.action)"' "$AR_JSON" 2>/dev/null
+    echo ""
     echo "--- Live IPv4 rules ---"
     ar_rule_get | sed 's/^/  /'
     echo ""
@@ -39,6 +40,16 @@ cmd_status() {
     AR_DIFF_MODE=check
     export AR_DIFF_MODE
     ar_apply_once >/dev/null
+}
+
+cmd_reconcile() {
+    # Delegate to the standalone reconcile binary for idempotent one-shot
+    exec /usr/local/bin/agentic-route-reconcile "$@"
+}
+
+cmd_daemon() {
+    # Delegate to the standalone daemon binary
+    exec /usr/local/bin/agentic-route-daemon "$@"
 }
 
 cmd_monitor() {
@@ -68,8 +79,7 @@ cmd_diff() {
     done < <(jq -r '.rules[] | "\(.prio)|\(.selector) \(.action)"' "$AR_JSON" 2>/dev/null)
     echo "--- forbidden rules present (would-del) ---"
     local -a frb=()
-    while IFS= read -r f; do [ -n "$f" ] && frb+=("$f"); done \
-        < <(jq -r '.forbidden_rules[]? | "\(.prio // 0)|\(.match)"' "$AR_JSON" 2>/dev/null)
+    while IFS= read -r f; do [ -n "$f" ] && frb+=("$f"); done         < <(jq -r '.forbidden_rules[]? | "\(.prio // 0)|\(.match)"' "$AR_JSON" 2>/dev/null)
     while IFS=$'\t' read -r prio sa; do
         [ -z "$prio" ] && continue
         ar_spec_rule "$prio" | grep -qF -- "$sa" && continue
@@ -96,7 +106,7 @@ cmd_diff() {
             [ -n "$dev" ] && ! printf '%s' "$line" | grep -qF -- "$dev" && continue
             match=0; break
         done < <(ar_route_get)
-        [ "$match" -eq 0 ] || printf '  ~ %s via %s dev %s\n' "$dst" "${via:--}" "${dev:-?}"
+        [ "$match" -eq 0 ] || printf '  ~ %s via %s dev %s\n' "$dst" "${via:- -}" "${dev:-?}"
     done < <(jq -r '.pinned_routes[]? | [.dst, (.via // ""), (.dev // "")] | @tsv' "$AR_JSON" 2>/dev/null)
     echo ""
     echo "(read-only: run 'agentic-route enforce' to apply)"
@@ -150,7 +160,7 @@ cmd_mcp() {
             notifications/*) ;;
             ping) printf '{"jsonrpc":"2.0","id":%s,"result":{}}\n' "$req_id" ;;
             tools/list)
-                printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"route_status","description":"Show live and desired kernel rules and routes (read-only)","inputSchema":{"type":"object","properties":{},"required":[]}},{"name":"route_check","description":"Report whether routing has drifted from the spec (read-only, no mutation)","inputSchema":{"type":"object","properties":{},"required":[]}},{"name":"route_diff","description":"Precise diff of spec vs live: rules to add, forbidden rules to remove, pinned routes to replace (read-only)","inputSchema":{"type":"object","properties":{},"required":[]}},{"name":"route_trace","description":"Trace how a packet to a target IP would route, optionally from a source IP (read-only)","inputSchema":{"type":"object","properties":{"target":{"type":"string","description":"destination IP"},"source":{"type":"string","description":"optional source IP"}},"required":["target"]}}]}}\n' "$req_id" ;;
+                printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"route_status","description":"Show live and desired kernel rules and routes (read-only)","inputSchema":{"type":"object","properties":{},"required":[]}},{"name":"route_check","description":"Report whether routing has drifted from the spec (read-only, no mutation)","inputSchema":{"type":"object","properties":{},"required":[]}},{"name":"route_diff","description":"Precise diff of spec vs live: rules to add, forbidden rules to remove, pinned routes to replace (read-only)","inputSchema":{"type":"object","properties":{},"required":[]}},{"name":"route_trace","description":"Trace how a packet to a target IP would route, optionally from a source IP (read-only)","inputSchema":{"type":"object","properties":{"target":{"type":"string","description":"destination IP"},"source":{"type":"string","description":"optional source IP"}},{"required":["target"]}}]}}\n' "$req_id" ;;
             tools/call)
                 tool=$(printf '%s' "$line" | jq -r '.params.name // empty' 2>/dev/null)
                 case "$tool" in
@@ -178,15 +188,16 @@ agentic-route: declarative kernel policy-routing reconciler
 Usage: agentic-route <command>
 
 Commands:
-  status    Show desired and live rules and routes
-  check     Report drift without changing kernel state
-  diff      Precise read-only diff of spec vs live routing
-  trace     Trace how a packet routes (ip route get wrapper)
-  enforce   Apply surgical check-then-act reconciliation
-  monitor   Reconcile on ip monitor rule/route/link events
-  daemon    Alias for monitor
-  mcp       Start read-only stdio MCP JSON-RPC server
-  api       Start local REST API server
+  status      Show desired and live rules and routes
+  check       Report drift without changing kernel state
+  diff        Precise read-only diff of spec vs live routing
+  trace       Trace how a packet routes (ip route get wrapper)
+  enforce     Apply surgical check-then-act reconciliation
+  reconcile   One-shot idempotent reconcile (discovers + intent + applies)
+  daemon      Event-driven daemon (inotify + ip monitor with FIFO)
+  monitor     Legacy: reconcile on ip monitor rule/route/link events
+  mcp         Start read-only stdio MCP JSON-RPC server
+  api         Start local REST API server
 HELP
 }
 
@@ -198,7 +209,9 @@ main() {
         diff) cmd_diff ;;
         trace) shift; cmd_trace "$@" ;;
         enforce) cmd_enforce ;;
-        monitor|daemon) cmd_monitor ;;
+        reconcile) cmd_reconcile "$@" ;;
+        daemon) cmd_daemon "$@" ;;
+        monitor) cmd_monitor ;;
         mcp) cmd_mcp ;;
         api) cmd_api ;;
         api-handler) cmd_api_handler ;;
@@ -207,3 +220,4 @@ main() {
     esac
 }
 main "$@"
+

@@ -1,0 +1,18 @@
+[Unit]
+Description=agentic-route kernel policy routing reconciler daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/agentic-route-daemon
+Restart=always
+RestartSec=2
+CapabilityBoundingSet=CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN
+ProtectSystem=strict
+ReadWritePaths=/run/agentic-route /etc/agentic-route
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target
