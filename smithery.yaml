@@ -1,7 +1,13 @@
-# Smithery registry manifest — registers this stdio MCP server in the global Smithery index.
-# Run `smithery mcp publish` after pushing this file to auto-register.
+# Smithery configuration: https://smithery.ai/docs/config#smitheryyaml
 startCommand:
   type: stdio
-  config:
-    command: agentic-route
-    args: ["mcp"]
+  configSchema:
+    type: object
+    properties: {}
+    description: Kernel policy-routing lock and net-safe deadman switch. Exposes MCP tools (route_status, route_check, route_enforce, route_monitor) over stdio JSON-RPC.
+  commandFunction: |-
+    (config) => ({
+      command: 'agentic-route',
+      args: ['mcp']
+    })
+  exampleConfig: {}
