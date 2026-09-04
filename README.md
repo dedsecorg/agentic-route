@@ -124,3 +124,29 @@ Design invariants:
 ## License
 
 MIT License. See [LICENSE](LICENSE).
+
+## Contributing
+
+Contributions are welcome. Please:
+
+1. Fork the repository and create a feature branch.
+2. Make changes with `bash` or `rust` formatting on your toolchain.
+3. Run the test suite locally: `bash tests/test_cli.sh`.
+4. Open a pull request describing the change and its rationale.
+
+All contributions are assumed to be redistributable under the same MIT license
+unless explicitly stated otherwise. By submitting a pull request you certify
+that you have the right to license the contribution and that it does not
+introduce security-sensitive material (private IPs, tokens, or keys).
+
+---
+
+## Installation via Smithery
+
+Install the MCP server directly into Claude Desktop, Cursor, or other Smithery-supported clients:
+
+```bash
+npx -y @smithery/cli install @dedsecorg/agentic-route
+```
+
+This provisions `agentic-route` with the correct `mcp` argument automatically.
