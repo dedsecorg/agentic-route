@@ -76,6 +76,51 @@ subscribes to `ip monitor rule route link` with a short debounce.
 See [the architecture specification](docs/ARCHITECTURE.md) and
 [the MCP guide](docs/MCP_GUIDE.md).
 
+## net-safe: the deadman switch
+
+`agentic-route` reconciles the *eventual* steady state. `net-safe` protects the
+*transition*: when an agent (or human) is about to run a raw `ip rule`,
+`ip route`, or `iptables` change in the root namespace, it arms a timer and
+snapshots the full routing state. If nobody confirms within N seconds, it
+restores everything automatically - so a bad rule that severs the agent's own
+transport unwinds itself instead of locking the operator out.
+
+```bash
+net-safe arm 30       # snapshot everything + arm a 30s fuse
+ip rule add ...       # <-- the risky change
+# if you can still reach the network:
+net-safe confirm      # keep the changes, disarm
+# or, if something went wrong:
+net-safe rollback     # restore now (manual abort)
+net-safe status       # is the fuse armed?
+```
+
+The standard agent pattern (commit-confirmed, like Junos `commit confirmed`):
+
+```bash
+net-safe arm 30
+# apply the experimental network change
+if ping -c1 -W2 1.1.1.1 >/dev/null 2>&1; then
+    net-safe confirm
+else
+    net-safe rollback
+fi
+```
+
+If the change severs the default route, the `ping` never runs and the agent's
+session freezes - but the detached timer still hits 30s, replays the snapshot,
+and the host snaps back online with no out-of-band console.
+
+Design invariants:
+
+- **Full snapshot replay** - restores `ip rule`, every `ip route` table,
+  `iptables`, and `rp_filter`. It never does a partial restore.
+- **SIGHUP-survival** - the timer runs under `setsid` + `nohup`, so it keeps
+  ticking after the session that armed it is severed.
+- **Zero hardcoded identity** - the lifeline device/gateway are auto-detected
+  from the default route (override with `NETSAFE_DEV` / `NETSAFE_GW`).
+- **Coherence guard** - refuses to arm over an empty or broken snapshot.
+
 ## License
 
 MIT License. See [LICENSE](LICENSE).

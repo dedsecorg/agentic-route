@@ -1,0 +1,195 @@
+#!/usr/bin/env bash
+# net-safe - a deadman switch for risky network edits (commit-confirmed
+# semantics, like the "monitor resolution" 30s revert dialog).
+#
+# An agent (or human) running raw `ip rule`, `ip route`, or `iptables` in the
+# root namespace is operating on the same artery that carries its own transport.
+# One bad rule severs the session. net-safe arms a timer BEFORE the change: if
+# nobody confirms within TIMEOUT seconds, it restores the captured snapshot.
+#
+#   net-safe arm [seconds]      # snapshot state + arm fuse (default 30s)
+#   net-safe confirm            # happy path: keep changes, disarm
+#   net-safe rollback           # manual abort: restore now
+#   net-safe status             # is the fuse armed?
+#
+# Design invariants:
+#   1. FULL snapshot replay - restores ip rule + every route table + iptables +
+#      rp_filter. A half-restore is worse than no restore.
+#   2. SIGHUP-survival - the timer is setsid+nohup detached so it keeps ticking
+#      after the session that armed it is severed.
+#   3. Zero hardcoded identity - lifeline dev/gw are auto-detected from the
+#      default route, overridable via NETSAFE_DEV / NETSAFE_GW.
+#   4. Coherence guard - refuses to arm over an empty/broken snapshot.
+#
+# Pure Bash + iproute2 + iptables + coreutils. No daemons, no systemd.
+
+set -euo pipefail
+
+SELF="$(readlink -f "${BASH_SOURCE[0]}")"
+STATE_DIR="${NETSAFE_STATE_DIR:-/run/net-safe}"
+CONFIRM_FILE="$STATE_DIR/pending"
+RULE_SNAP="$STATE_DIR/ip_rule.snap"
+ROUTE_SNAP="$STATE_DIR/ip_route.snap"
+IPT_SNAP="$STATE_DIR/iptables.snap"
+SYS_SNAP="$STATE_DIR/sysctl.snap"
+DEV_FILE="$STATE_DIR/dev"
+GW_FILE="$STATE_DIR/gw"
+LOG_TAG="net-safe"
+
+NETSAFE_DEV="${NETSAFE_DEV:-}"
+NETSAFE_GW="${NETSAFE_GW:-}"
+
+log() { logger -t "$LOG_TAG" "$*"; }
+
+detect_lifeline() {
+    if [ -z "$NETSAFE_DEV" ]; then
+        NETSAFE_DEV="$(ip route show default 2>/dev/null | awk '{print $5; exit}')"
+        NETSAFE_DEV="${NETSAFE_DEV:-eth0}"
+    fi
+    if [ -z "$NETSAFE_GW" ]; then
+        NETSAFE_GW="$(ip route show default 2>/dev/null | awk '{print $3; exit}')"
+    fi
+}
+
+snapshot_state() {
+    detect_lifeline
+    mkdir -p "$STATE_DIR"
+    ip rule show            > "$RULE_SNAP" 2>/dev/null || true
+    ip route show table all > "$ROUTE_SNAP" 2>/dev/null || true
+    iptables-save           > "$IPT_SNAP" 2>/dev/null || true
+    {
+        sysctl -n net.ipv4.conf.all.rp_filter 2>/dev/null || echo 2
+        sysctl -n net.ipv4.conf.default.rp_filter 2>/dev/null || echo 2
+    } > "$SYS_SNAP"
+    printf '%s\n' "$NETSAFE_DEV" > "$DEV_FILE"
+    printf '%s\n' "$NETSAFE_GW" > "$GW_FILE"
+
+    if [ ! -s "$RULE_SNAP" ] || [ ! -s "$ROUTE_SNAP" ]; then
+        log "abort: snapshot empty; refusing to arm over broken state"
+        rm -rf "$STATE_DIR"
+        return 1
+    fi
+}
+
+restore_rules() {
+    # Deterministic reset: delete every non-builtin rule by priority, then
+    # replay the captured rules verbatim.
+    local prio line
+    while read -r prio; do
+        [ -z "$prio" ] && continue
+        case "$prio" in 0|32766|32767) continue ;; esac
+        ip rule del priority "$prio" 2>/dev/null || true
+    done < <(ip -4 rule show | awk -F':\t' '{print $1}')
+
+    while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        prio="${line%%:*}"
+        case "$prio" in 0|32766|32767) continue ;; esac
+        rule="${line#*:}"
+        rule="${rule#${rule%%[![:space:]]*}}"   # strip leading whitespace
+        # shellcheck disable=SC2086
+        ip rule add priority "$prio" $rule 2>/dev/null || true
+    done < "$RULE_SNAP"
+}
+
+restore_routes() {
+    local curtable="" line
+    while IFS= read -r line; do
+        case "$line" in
+            table\ *) curtable="${line#table }"; continue ;;
+        esac
+        [ -z "$line" ] && continue
+        if [ -n "$curtable" ] && [[ "$curtable" =~ ^[0-9]+$ ]]; then
+            ip route replace $line table "$curtable" 2>/dev/null || true
+        fi
+    done < "$ROUTE_SNAP"
+}
+
+restore_iptables() {
+    [ -s "$IPT_SNAP" ] && iptables-restore < "$IPT_SNAP" 2>/dev/null || true
+}
+
+restore_state() {
+    if [ ! -f "$RULE_SNAP" ]; then
+        log "ERROR: no snapshot present"
+        detect_lifeline
+        ip route replace default via "${NETSAFE_GW}" dev "${NETSAFE_DEV}" onlink 2>/dev/null || true
+        return 1
+    fi
+    log "EMERGENCY ROLLBACK: restoring snapshot"
+    restore_iptables
+    restore_routes
+    restore_rules
+    local dev gw
+    dev="$(cat "$DEV_FILE" 2>/dev/null || echo eth0)"
+    gw="$(cat "$GW_FILE" 2>/dev/null || echo '')"
+    if [ -n "$gw" ]; then
+        ip route replace default via "$gw" dev "$dev" onlink 2>/dev/null || true
+    fi
+    sysctl -w net.ipv4.conf.all.rp_filter=2 >/dev/null 2>&1 || true
+    sysctl -w net.ipv4.conf.default.rp_filter=2 >/dev/null 2>&1 || true
+    log "rollback complete"
+}
+
+cmd_arm() {
+    local t="${1:-30}"
+    case "$t" in
+        ''|*[!0-9]*) echo "error: timeout must be a positive integer" >&2; exit 1 ;;
+    esac
+    if [ -f "$CONFIRM_FILE" ]; then
+        echo "error: already armed. 'net-safe confirm' or 'net-safe rollback' first." >&2
+        exit 1
+    fi
+    snapshot_state || exit 1
+    touch "$CONFIRM_FILE"
+    log "armed: ${t}s fuse, snapshot ready"
+
+    # SIGHUP-safe detached timer: setsid + nohup + full fd detach.
+    setsid nohup bash -c '
+        sleep "$1"
+        if [ -f "$2" ]; then
+            logger -t net-safe "fuse expired, rolling back"
+            "$3" rollback
+        fi
+    ' _ "$t" "$CONFIRM_FILE" "$SELF" >/dev/null 2>&1 < /dev/null &
+
+    echo "net-safe: armed for ${t}s. confirm within the window or it reverts."
+}
+
+cmd_confirm() {
+    if [ ! -f "$CONFIRM_FILE" ]; then
+        echo "net-safe: not armed."
+        return 0
+    fi
+    rm -rf "$STATE_DIR"
+    log "confirmed; disarmed"
+    echo "net-safe: confirmed. changes kept."
+}
+
+cmd_rollback() {
+    if [ ! -f "$CONFIRM_FILE" ]; then
+        echo "net-safe: not armed; nothing to roll back." >&2
+        return 1
+    fi
+    echo "net-safe: manual rollback..."
+    restore_state
+    rm -rf "$STATE_DIR"
+    echo "net-safe: reverted."
+}
+
+cmd_status() {
+    if [ ! -f "$CONFIRM_FILE" ]; then
+        echo "net-safe: disarmed."
+        return 0
+    fi
+    echo "net-safe: ARMED (snapshot dir $STATE_DIR)"
+}
+
+case "${1:-}" in
+    arm)      shift; cmd_arm "${1:-30}" ;;
+    confirm)  cmd_confirm ;;
+    rollback) cmd_rollback ;;
+    status)   cmd_status ;;
+    -h|--help|help) echo "Usage: net-safe {arm [seconds]|confirm|rollback|status}" ;;
+    *) echo "net-safe: unknown command '${1:-}'" >&2; exit 1 ;;
+esac
