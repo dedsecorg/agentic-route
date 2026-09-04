@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# agentic-route-daemon - event-driven reconciler with FIFO multiplexing
+# Watches /etc/agentic-route/intent.json (inotify) and kernel routing (ip monitor)
+# Runs agentic-route-reconcile on events with 200ms debounce
+
+set -eo pipefail
+
+RUN_DIR="/run/agentic-route"
+FIFO="$RUN_DIR/events.fifo"
+INTENT_DIR="/etc/agentic-route"
+RECONCILE_BIN="/usr/local/bin/agentic-route-reconcile"
+
+mkdir -p "$RUN_DIR" "$INTENT_DIR"
+[[ -p "$FIFO" ]] || mkfifo "$FIFO"
+
+# Clean up children and FIFO on exit
+trap 'exec 3>&-; kill $(jobs -p) 2>/dev/null; rm -f "$FIFO"' EXIT INT TERM
+
+# Stream 1: Intent file changes (directory watch survives vim atomic rename)
+inotifywait -m -q -e close_write,moved_to --format '%f' "$INTENT_DIR/" > "$FIFO" 2>/dev/null &
+
+# Stream 2: Kernel routing changes (Netlink)
+ip monitor rule route link 2>/dev/null > "$FIFO" &
+
+# Hold FIFO open on FD 3 so it never receives EOF when writers restart
+exec 3<> "$FIFO"
+
+ar_log() { echo "[agentic-route-daemon] $*" >&2; }
+ar_log "daemon started, watching $INTENT_DIR and kernel netlink"
+
+# Unified debounced loop reading strictly from FD 3
+while read -r event <&3; do
+  # Drain burst events (200ms window)
+  while read -r -t 0.2 -u 3 _; do :; done
+  
+  # Only reconcile on intent.json changes or kernel events
+  case "$event" in
+    intent.json|*.json)
+      ar_log "intent file changed: $event"
+      ;;
+    *)
+      ar_log "kernel routing event"
+      ;;
+  esac
+  
+  # Run idempotent reconciliation
+  if "$RECONCILE_BIN"; then
+    :  # clean, no drift
+  else
+    ar_log "drift corrected"
+  fi
+done
+
+ar_log "daemon stopped"
+

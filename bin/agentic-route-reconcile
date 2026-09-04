@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+# agentic-route-reconcile - one-shot idempotent reconciliation
+# Reads intent from /etc/agentic-route/intent.json, discovers kernel state,
+# computes desired state, applies only if drift exists.
+# Exit codes: 0 = clean, 1 = drift corrected, 2 = error
+
+set -euo pipefail
+
+LIB="/usr/local/lib/agentic-route/core.sh"
+INTENT_FILE="/etc/agentic-route/intent.json"
+STATE_DIR="/run/agentic-route"
+STATE_FILE="$STATE_DIR/state.json"
+
+[ -f "$LIB" ] || { echo "Missing engine: $LIB" >&2; exit 2; }
+[ -f "$INTENT_FILE" ] || { echo "Missing intent: $INTENT_FILE" >&2; exit 2; }
+
+mkdir -p "$STATE_DIR"
+
+# shellcheck source=core.sh
+source "$LIB"
+
+ar_log() { [ "${AR_QUIET:-0}" = 1 ] || echo "[agentic-route] $*" >&2; }
+ar_die() { echo "[agentic-route] FATAL: $*" >&2; exit 2; }
+
+# --- Discovery: read current kernel state ---
+discover_rules() {
+  ip -4 rule show 2>/dev/null | awk -F':\t' '{ gsub(/[ \t]+/," ",$2); print $1 "\t" $2 }'
+}
+
+discover_routes() {
+  ip -4 route show 2>/dev/null | awk '{ gsub(/[ \t]+/," ",$0); sub(/^ +/,"",$0); print }'
+}
+
+# --- Build effective spec from intent + discovered ---
+build_effective_spec() {
+  local intent_file="$1"
+  local discovered_rules="$2"
+  local discovered_routes="$3"
+  
+  local tmp_spec
+  tmp_spec=$(mktemp -p "$STATE_DIR")
+  
+  # Use jq to construct effective spec combining discovered + intent
+  jq -n     --argjson intent "$(cat "$intent_file")"     --arg discovered_rules "$discovered_rules"     --arg discovered_routes "$discovered_routes"     '
+    ($discovered_rules | split("\n") | map(select(length > 0)) | map(
+      split("\t") | {prio: (.[0] | tonumber), selector_action: .[1]}
+    )) as $disc_rules |
+    
+    ($intent.forbidden_rules // []) as $forbidden |
+    
+    ($intent.custom_rules // []) as $custom |
+    
+    ($disc_rules | map(select(. as $r | $forbidden | map(
+      if (.prio // 0) != 0 then .prio == $r.prio and (.match | test($r.selector_action)) else (.match | test($r.selector_action)) end
+    ) | any) | not)) as $filtered_disc |
+    
+    ($custom | map(select(. as $c | $filtered_disc | map(.selector_action == ($c.selector + " " + $c.action)) | any) | not)) as $to_add |
+    
+    ($filtered_disc + ($to_add | map({prio, selector_action: (.selector + " " + .action)}))) as $effective_rules |
+    
+    ($intent.pinned_routes // []) as $pinned |
+    
+    {version: 1, rules: $effective_rules, pinned_routes: $pinned, forbidden_rules: $forbidden}
+    ' > "$tmp_spec"
+  
+  echo "$tmp_spec"
+}
+
+# --- Main reconciliation ---
+main() {
+  AR_QUIET=1
+  
+  local discovered_rules discovered_routes
+  discovered_rules=$(discover_rules)
+  discovered_routes=$(discover_routes)
+  
+  local effective_spec
+  effective_spec=$(build_effective_spec "$INTENT_FILE" "$discovered_rules" "$discovered_routes")
+  
+  AR_JSON="$effective_spec"
+  AR_DIFF_MODE="enforce"
+  export AR_JSON AR_DIFF_MODE
+  
+  local drift
+  drift=$(ar_apply_once)
+  
+  rm -f "$effective_spec"
+  
+  # Update state.json
+  jq -n     --arg rules "$discovered_rules"     --arg routes "$discovered_routes"     --argjson drift "$drift"     '{discovered_rules: ($rules | split("\n") | map(select(length > 0))), discovered_routes: ($routes | split("\n") | map(select(length > 0))), last_reconcile: now | todateiso8601, drift_corrected: $drift}'     > "$STATE_FILE"
+  
+  if [ "$drift" -eq 0 ]; then
+    ar_log "clean: live state matches intent"
+    exit 0
+  else
+    ar_log "enforced: corrected $drift drift(s)"
+    exit 1
+  fi
+}
+
+main "$@"
+

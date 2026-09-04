@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "comment": "User intent only. Daemon writes discovered state to /run/agentic-route/state.json. Edit this file to express routing intent.",
+  "forbidden_rules": [
+    { "prio": 31580, "match": "suppress_prefixlength 0", "reason": "Remove a VPN capture rule only at this priority" },
+    { "match": "100.64.0.0/10 lookup main", "reason": "Do not let a VPN redirect mesh traffic through main" }
+  ],
+  "pinned_routes": [
+    { "dst": "198.51.100.7/32", "via": "192.0.2.1", "dev": "eth0", "reason": "Keep a VPN endpoint reachable outside the tunnel" },
+    { "dst": "default", "via": "192.0.2.1", "dev": "eth0", "reason": "Keep fallback egress present" }
+  ],
+  "custom_rules": [
+    { "prio": 480, "selector": "from all to 100.64.0.0/10", "action": "lookup 52" },
+    { "prio": 32765, "selector": "not from all fwmark 0xe1f1", "action": "lookup 205" }
+  ]
+}
