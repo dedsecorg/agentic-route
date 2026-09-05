@@ -11,8 +11,10 @@ RUN apk add --no-cache \
 
 WORKDIR /app
 
-# Copy binaries and configs directly
+# Copy binaries
 COPY bin/ /usr/local/bin/
+
+# Copy configs if they exist
 COPY etc/ /etc/agentic-route/
 
 RUN chmod +x /usr/local/bin/*
