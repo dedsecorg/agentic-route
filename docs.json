@@ -1,0 +1,35 @@
+{
+  "name": "agentic-route",
+  "navigation": {
+    "groups": [
+      {
+        "group": "Guide",
+        "pages": [
+          "index",
+          "installation",
+          "architecture",
+          "commands",
+          "intent-file",
+          "mcp-guide"
+        ]
+      },
+      {
+        "group": "Reference",
+        "pages": [
+          "cli-reference",
+          "configuration",
+          "api-reference"
+        ]
+      },
+      {
+        "group": "Deployment",
+        "pages": [
+          "container",
+          "github-pages",
+          "systemd"
+        ]
+      }
+    ]
+  }
+}
+EOF 2>&1
