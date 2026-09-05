@@ -1,0 +1,15 @@
+title: agentic-route
+description: Declarative kernel policy-routing reconciler
+url: https://dedsecorg.github.io
+baseurl: /agentic-route
+theme: minima
+plugins:
+  - jekyll-feed
+  - jekyll-seo-tag
+markdown: kramdown
+highlighter: rouge
+kramdown:
+  input: GFM
+  syntax_highlighter: rouge
+
+EOF 2>&1
