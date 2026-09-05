@@ -2,6 +2,51 @@
 
 **Declarative kernel policy-routing reconciler.** Define desired routing state in JSON; the daemon continuously reconciles the Linux kernel routing tables and policy rules to match — event-driven, idempotent, and hardened for production.
 
+[![Release](https://img.shields.io/github/v/release/dedsecorg/agentic-route?color=blue&logo=github)](https://github.com/dedsecorg/agentic-route/releases)
+[![GHCR Image](https://img.shields.io/badge/ghcr.io-dedsecorg%2Fagentic--route-24292e?logo=docker)](https://github.com/dedsecorg/agentic-route/pkgs/container/agentic-route)
+[![Multi-Arch](https://img.shields.io/badge/arch-amd64%20%7C%20arm64-blue)]()
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+---
+
+### OCI Container (GHCR)
+
+Multi-architecture images (`linux/amd64`, `linux/arm64`) are published automatically on every semantic release.
+
+#### Pulling the Image
+
+```bash
+# Pinned release (recommended for deterministic CI / sandboxes)
+docker pull ghcr.io/dedsecorg/agentic-route:1.0.0
+
+# Moving major release (auto-receives non-breaking fixes)
+docker pull ghcr.io/dedsecorg/agentic-route:v1
+
+# Latest build from default branch
+docker pull ghcr.io/dedsecorg/agentic-route:latest
+```
+
+#### Running in Agent Sandboxes
+
+Because routing reconciliation communicates directly with host Netlink sockets, the container requires the `NET_ADMIN` capability and host network namespace:
+
+```bash
+# Query routing state and status
+docker run --rm \
+  --cap-add=NET_ADMIN \
+  --network=host \
+  ghcr.io/dedsecorg/agentic-route:v1 status
+
+# Run the reconciliation loop in daemon mode
+docker run -d \
+  --name agentic-route \
+  --restart unless-stopped \
+  --cap-add=NET_ADMIN \
+  --network=host \
+  -v /etc/hermes-route:/etc/hermes-route \
+  ghcr.io/dedsecorg/agentic-route:v1 daemon
+```
+
 ---
 
 ## Why This Exists
