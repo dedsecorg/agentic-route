@@ -1,4 +1,6 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 dedsecorg
 set -euo pipefail
 PREFIX="${PREFIX:-/usr/local}"
 sudo -S -p '' install -Dm755 bin/agentic-route "$PREFIX/bin/agentic-route"

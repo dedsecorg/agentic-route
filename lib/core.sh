@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 dedsecorg
 # agentic-route-lib.sh - the reconciler ENGINE. Pure, portable, dependency-free.
 # STATE HANDLER, not source of truth: it only
 # reads routes.json and reconciles reality back to it.
