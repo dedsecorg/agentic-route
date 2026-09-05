@@ -6,6 +6,7 @@
 [![GHCR Image](https://img.shields.io/badge/ghcr.io-dedsecorg%2Fagentic--route-24292e?logo=docker)](https://github.com/dedsecorg/agentic-route/pkgs/container/agentic-route)
 [![Multi-Arch](https://img.shields.io/badge/arch-amd64%20%7C%20arm64-blue)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Context7](https://img.shields.io/badge/Context7-Indexed-brightgreen)](https://context7.com/dedsecorg/agentic-route)
 
 ---
 
@@ -45,6 +46,19 @@ docker run -d \
   --network=host \
   -v /etc/hermes-route:/etc/hermes-route \
   ghcr.io/dedsecorg/agentic-route:v1 daemon
+```
+
+---
+
+### Context7 Documentation
+
+This repository is indexed on [Context7](https://context7.com/dedsecorg/agentic-route) with 148 code snippets for AI-assisted development. Use the Context7 MCP server or visit the link above for searchable documentation.
+
+```bash
+# Query via Context7 MCP
+# "How to install agentic-route?"
+# "agentic-route commands reference"
+# "intent.json schema"
 ```
 
 ---
