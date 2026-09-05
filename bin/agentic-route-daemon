@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 dedsecorg
 # agentic-route-daemon - event-driven reconciler with FIFO multiplexing
 # Watches /etc/agentic-route/intent.json (inotify) and kernel routing (ip monitor)
 # Runs agentic-route-reconcile on events with 200ms debounce

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 dedsecorg
 # agentic-route: declarative kernel policy-routing reconciler
 set -uo pipefail
 

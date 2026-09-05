@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 dedsecorg
 # agentic-route-reconcile - one-shot idempotent reconciliation
 # Reads intent from /etc/agentic-route/intent.json, discovers kernel state,
 # computes desired state, applies only if drift exists.
