@@ -11,5 +11,3 @@ highlighter: rouge
 kramdown:
   input: GFM
   syntax_highlighter: rouge
-
-EOF 2>&1
