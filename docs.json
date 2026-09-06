@@ -24,7 +24,8 @@
         "pages": [
           "cli-reference",
           "configuration",
-          "api-reference"
+          "api-reference",
+          "pki"
         ]
       },
       {
