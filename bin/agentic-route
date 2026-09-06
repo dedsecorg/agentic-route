@@ -148,6 +148,7 @@ cmd_api() {
   while true; do
     socat OPENSSL-LISTEN:"$port",reuseaddr,fork,cert="$cert",key="$key",cafile="$ca",verify=1,openssl-min-proto-version=TLS1.3 \
       SYSTEM:"$0 api-handler" 2>/dev/null
+    ar_log "ERROR: mTLS API listener on :$port exited (rc=$?); retrying in 1s"
     sleep 1
   done
 }
@@ -155,10 +156,14 @@ cmd_api() {
 cmd_api_handler() {
   local path
   IFS=' ' read -r _ path _ || true
-  printf 'HTTP/1.1 200 OK
-Content-Type: application/json
-
-'
+  case "$path" in
+    /api/v1/status|/api/v1/check|/api/v1/enforce|/api/v1/diff)
+      printf 'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n' ;;
+    *)
+      printf 'HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\n\r\n'
+      jq -n '{error:"not found"}'
+      return ;;
+  esac
   case "$path" in
     /api/v1/status) cmd_status 2>&1 | jq -Rs '{status:"ok", text: .}' ;;
     /api/v1/check)
@@ -179,12 +184,6 @@ Content-Type: application/json
       local out
       out=$(cmd_diff 2>&1)
       printf '%s' "$out" | jq -Rs '{status:"ok", text:.}' ;;
-    *)
-      printf 'HTTP/1.1 404 Not Found
-Content-Type: application/json
-
-'
-      jq -n '{error:"not found"}' ;;
   esac
 }
 
@@ -195,6 +194,11 @@ mcp_text_result() {
   jq -cn --argjson id "$id" --arg text "$text" '{jsonrpc:"2.0",id:$id,result:{content:[{type:"text",text:$text}]}}'
 }
 
+mcp_tool_error() {
+  local id="$1" text="$2"
+  jq -cn --argjson id "$id" --arg text "$text" '{jsonrpc:"2.0",id:$id,result:{isError:true,content:[{type:"text",text:$text}]}}'
+}
+
 mcp_error() {
   local id="$1" code="$2" msg="$3"
   jq -cn --argjson id "$id" --argjson code "$code" --arg msg "$msg" '{jsonrpc:"2.0",id:$id,error:{code:$code,message:$msg}}'
@@ -203,7 +207,7 @@ mcp_error() {
 cmd_mcp() {
   command -v jq >/dev/null 2>&1 || ar_die "jq is required for mcp"
   ar_log "MCP server (read-only, stdio): route_status route_check route_diff route_trace"
-  local line method req_id tool target src out
+  local line method req_id tool target src out rc
   while IFS= read -r line || [ -n "$line" ]; do
     [ -z "$line" ] && continue
     method=$(printf '%s' "$line" | jq -r '.method // empty' 2>/dev/null)
@@ -234,8 +238,9 @@ cmd_mcp() {
             target=$(printf '%s' "$line" | jq -r '.params.arguments.target // empty' 2>/dev/null)
             src=$(printf '%s' "$line" | jq -r '.params.arguments.from // empty' 2>/dev/null)
             if [ -z "$target" ]; then mcp_error "$req_id" -32602 "route_trace requires 'target'"; continue; fi
-            if [ -n "$src" ]; then out=$(cmd_trace "$target" from "$src" 2>&1); else out=$(cmd_trace "$target" 2>&1); fi
-            mcp_text_result "$req_id" "$out" ;;
+            rc=0
+            if [ -n "$src" ]; then out=$(cmd_trace "$target" from "$src" 2>&1) || rc=$?; else out=$(cmd_trace "$target" 2>&1) || rc=$?; fi
+            if [ "$rc" -eq 0 ]; then mcp_text_result "$req_id" "$out"; else mcp_tool_error "$req_id" "route_trace failed (rc=$rc): $out"; fi ;;
           *) mcp_error "$req_id" -32601 "Unknown tool: $tool" ;;
         esac ;;
       *) mcp_error "$req_id" -32601 "Method not supported: $method" ;;
