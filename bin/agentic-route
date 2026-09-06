@@ -10,7 +10,7 @@ export AR_JSON
 source "$SCRIPT_DIR/lib/core.sh"
 
 usage() {
-  echo "Usage: agentic-route {enforce|check|status|monitor|daemon|diff|trace|api|api-handler|reconcile}" >&2
+  echo "Usage: agentic-route {enforce|check|status|monitor|daemon|diff|trace|api|api-handler|reconcile|mcp}" >&2
   exit 2
 }
 
@@ -129,12 +129,26 @@ cmd_trace() {
 
 cmd_api() {
   local port="${AGENTIC_ROUTE_API_PORT:-8099}"
+  # mTLS material: paths only, files live outside git. See docs/pki.md.
+  local cert="${AGENTIC_ROUTE_TLS_CERT:-/etc/agentic-route/certs/api.crt}"
+  local key="${AGENTIC_ROUTE_TLS_KEY:-/etc/agentic-route/certs/api.key}"
+  local ca="${AGENTIC_ROUTE_TLS_CA:-/etc/agentic-route/certs/ca.crt}"
   if ! command -v socat >/dev/null 2>&1; then
-    ar_die "socat is required for api"
+    ar_die "socat (with OpenSSL) is required for api"
   fi
-  ar_log "API listening on :$port"
+  local f
+  for f in "$cert" "$key" "$ca"; do
+    [ -r "$f" ] || ar_die "TLS material missing or unreadable: $f (see docs/pki.md)"
+  done
+  ar_log "API listening on :$port (mTLS, client CA: $ca)"
+  # socat terminates TLS and verifies the client certificate against $ca
+  # before api-handler is spawned, so /api/v1/enforce is unreachable without
+  # a valid client cert. TLS 1.3 only so a PQ-capable OpenSSL (>= 3.5)
+  # negotiates X25519MLKEM768 automatically.
   while true; do
-    socat TCP-LISTEN:"$port",reuseaddr,fork SYSTEM:"$0 api-handler" 2>/dev/null
+    socat OPENSSL-LISTEN:"$port",reuseaddr,fork,cert="$cert",key="$key",cafile="$ca",verify=1,openssl-min-proto-version=TLS1.3 \
+      SYSTEM:"$0 api-handler" 2>/dev/null
+    sleep 1
   done
 }
 
@@ -174,6 +188,61 @@ Content-Type: application/json
   esac
 }
 
+# Read-only MCP server (JSON-RPC over stdio). Deliberately exposes no mutation
+# tool: enforce/reconcile stay CLI/operator actions behind the mTLS REST API.
+mcp_text_result() {
+  local id="$1" text="$2"
+  jq -cn --argjson id "$id" --arg text "$text" '{jsonrpc:"2.0",id:$id,result:{content:[{type:"text",text:$text}]}}'
+}
+
+mcp_error() {
+  local id="$1" code="$2" msg="$3"
+  jq -cn --argjson id "$id" --argjson code "$code" --arg msg "$msg" '{jsonrpc:"2.0",id:$id,error:{code:$code,message:$msg}}'
+}
+
+cmd_mcp() {
+  command -v jq >/dev/null 2>&1 || ar_die "jq is required for mcp"
+  ar_log "MCP server (read-only, stdio): route_status route_check route_diff route_trace"
+  local line method req_id tool target src out
+  while IFS= read -r line || [ -n "$line" ]; do
+    [ -z "$line" ] && continue
+    method=$(printf '%s' "$line" | jq -r '.method // empty' 2>/dev/null)
+    req_id=$(printf '%s' "$line" | jq -c '.id // null' 2>/dev/null)
+    [ -n "$req_id" ] || req_id=null
+    case "$method" in
+      initialize)
+        jq -cn --argjson id "$req_id" '{jsonrpc:"2.0",id:$id,result:{protocolVersion:"2024-11-05",capabilities:{tools:{}},serverInfo:{name:"agentic-route",version:"1.0.0"}}}' ;;
+      ping)
+        jq -cn --argjson id "$req_id" '{jsonrpc:"2.0",id:$id,result:{}}' ;;
+      notifications/*) ;;
+      tools/list)
+        jq -cn --argjson id "$req_id" '{jsonrpc:"2.0",id:$id,result:{tools:[
+          {name:"route_status",description:"Desired vs live IPv4 rules/routes plus drift count (read-only)",inputSchema:{type:"object",properties:{},required:[]}},
+          {name:"route_check",description:"Drift detection: reports whether live kernel state matches the spec (read-only)",inputSchema:{type:"object",properties:{},required:[]}},
+          {name:"route_diff",description:"Precise would-add/would-del/would-replace diff, no mutation",inputSchema:{type:"object",properties:{},required:[]}},
+          {name:"route_trace",description:"ip route get for a target, optionally from a source address",inputSchema:{type:"object",properties:{target:{type:"string",description:"Destination IP or hostname"},from:{type:"string",description:"Optional source address"}},required:["target"]}}
+        ]}}' ;;
+      tools/call)
+        tool=$(printf '%s' "$line" | jq -r '.params.name // empty' 2>/dev/null)
+        case "$tool" in
+          route_status) out=$(cmd_status 2>&1); mcp_text_result "$req_id" "$out" ;;
+          route_check)
+            if cmd_check >/dev/null 2>&1; then out="in-sync: no drift"; else out="drift detected (run 'agentic-route diff' for detail)"; fi
+            mcp_text_result "$req_id" "$out" ;;
+          route_diff) out=$(cmd_diff 2>&1); mcp_text_result "$req_id" "$out" ;;
+          route_trace)
+            target=$(printf '%s' "$line" | jq -r '.params.arguments.target // empty' 2>/dev/null)
+            src=$(printf '%s' "$line" | jq -r '.params.arguments.from // empty' 2>/dev/null)
+            if [ -z "$target" ]; then mcp_error "$req_id" -32602 "route_trace requires 'target'"; continue; fi
+            if [ -n "$src" ]; then out=$(cmd_trace "$target" from "$src" 2>&1); else out=$(cmd_trace "$target" 2>&1); fi
+            mcp_text_result "$req_id" "$out" ;;
+          *) mcp_error "$req_id" -32601 "Unknown tool: $tool" ;;
+        esac ;;
+      *) mcp_error "$req_id" -32601 "Method not supported: $method" ;;
+    esac
+  done
+}
+
 case "${1:-enforce}" in
   enforce) cmd_enforce ;;
   check)   cmd_check ;;
@@ -184,6 +253,7 @@ case "${1:-enforce}" in
   api)     cmd_api ;;
   api-handler) cmd_api_handler ;;
   reconcile) cmd_reconcile "$@" ;;
+  mcp)     cmd_mcp ;;
   -h|--help|help) usage ;;
   *) usage ;;
 esac

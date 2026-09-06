@@ -9,7 +9,7 @@
 set -euo pipefail
 
 LIB="/usr/local/lib/agentic-route/core.sh"
-INTENT_FILE="/etc/agentic-route/intent.json"
+INTENT_FILE="${AGENTIC_ROUTE_INTENT:-/etc/agentic-route/intent.json}"
 STATE_DIR="/run/agentic-route"
 STATE_FILE="$STATE_DIR/state.json"
 

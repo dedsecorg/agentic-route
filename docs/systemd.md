@@ -53,7 +53,7 @@ journalctl -u agentic-route --since "1 hour ago"
 
 ## Daemon Behavior
 
-- Watches `/etc/agentic-route/routes.json` for changes (inotifywait)
+- Watches `/etc/agentic-route/intent.json` for changes (inotifywait on the directory)
 - Debounced reconciliation (200ms default)
 - Idempotent: only applies changes when drift detected
 - Updates `/run/agentic-route/state.json` with current state
