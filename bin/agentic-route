@@ -9,217 +9,182 @@ AR_JSON="${AGENTIC_ROUTE_CONF:-/etc/agentic-route/routes.json}"
 export AR_JSON
 source "$SCRIPT_DIR/lib/core.sh"
 
-cmd_check() {
-    AR_DIFF_MODE=check
-    export AR_DIFF_MODE
-    local drift
-    drift=$(ar_apply_once)
-    [ "$drift" -eq 0 ]
+usage() {
+  echo "Usage: agentic-route {enforce|check|status|monitor|daemon|diff|trace|api|api-handler|reconcile}" >&2
+  exit 2
 }
 
 cmd_enforce() {
-    AR_DIFF_MODE=enforce
-    export AR_DIFF_MODE
-    ar_apply_once >/dev/null
+  AR_DIFF_MODE=enforce
+  export AR_DIFF_MODE
+  ar_apply_once >/dev/null
+}
+
+cmd_check() {
+  AR_DIFF_MODE=check
+  export AR_DIFF_MODE
+  local drift
+  drift=$(ar_apply_once)
+  [ "$drift" -eq 0 ]
 }
 
 cmd_status() {
-    echo "agentic-route status"
-    echo "Spec: $AR_JSON"
-    echo ""
-    echo "--- Desired rules ---"
-    jq -r '.rules[]? | "  \(.prio): \(.selector) \(.action)"' "$AR_JSON" 2>/dev/null
-    echo ""
-    echo "--- Live IPv4 rules ---"
-    ar_rule_get | sed 's/^/  /'
-    echo ""
-    echo "--- Desired pinned routes ---"
-    jq -r '.pinned_routes[]? | "  \(.dst) via \(.via // "-") dev \(.dev // "-")"' "$AR_JSON" 2>/dev/null
-    echo "--- Live IPv4 routes ---"
-    ar_route_get | sed 's/^/  /'
-    echo ""
-    echo "--- Drift ---"
-    AR_DIFF_MODE=check
-    export AR_DIFF_MODE
-    ar_apply_once >/dev/null
+  echo "agentic-route status"
+  echo "Spec: $AR_JSON"
+  echo ""
+  echo "--- Desired rules ---"
+  jq -r '.rules[]? | "  \(.prio): \(.selector) \(.action)"' "$AR_JSON" 2>/dev/null
+  echo ""
+  echo "--- Live IPv4 rules ---"
+  ar_rule_get | sed 's/^/  /'
+  echo ""
+  echo "--- Desired pinned routes ---"
+  jq -r '.pinned_routes[]? | "  \(.dst) via \(.via // "-") dev \(.dev // "-")"' "$AR_JSON" 2>/dev/null
+  echo "--- Live IPv4 routes ---"
+  ar_route_get | sed 's/^/  /'
+  echo ""
+  echo "--- Drift ---"
+  AR_DIFF_MODE=check
+  export AR_DIFF_MODE
+  ar_apply_once >/dev/null
 }
 
 cmd_reconcile() {
-    # Delegate to the standalone reconcile binary for idempotent one-shot
-    exec /usr/local/bin/agentic-route-reconcile "$@"
+  exec /usr/local/bin/agentic-route-reconcile "$@"
 }
 
 cmd_daemon() {
-    # Delegate to the standalone daemon binary
-    exec /usr/local/bin/agentic-route-daemon "$@"
+  exec /usr/local/bin/agentic-route-daemon "$@"
 }
 
 cmd_monitor() {
-    command -v ip >/dev/null 2>&1 || ar_die "ip command is required"
-    ar_log "baseline reconcile"
+  command -v ip >/dev/null 2>&1 || ar_die "ip command is required"
+  ar_log "baseline reconcile"
+  cmd_enforce
+  ar_log "monitoring kernel rule, route, and link events"
+  ip monitor rule route link 2>/dev/null | while IFS= read -r _event; do
+    sleep 0.2
     cmd_enforce
-    ar_log "monitoring kernel rule, route, and link events"
-    ip monitor rule route link 2>/dev/null | while IFS= read -r _event; do
-        sleep 0.2
-        cmd_enforce
-        while IFS= read -r -t 0 _event; do :; done
-    done
+    while IFS= read -r -t 0 _event; do :; done
+  done
 }
 
-# cmd_diff - read-only. Reports drift as a precise diff of spec vs live, no mutation.
 cmd_diff() {
-    AR_DIFF_MODE=check
-    export AR_DIFF_MODE
-    local prio sa line
-    echo "agentic-route diff"
-    echo "Spec: $AR_JSON"
-    echo ""
-    echo "--- rules missing from live (would-add) ---"
-    while IFS='|' read -r prio sa; do
-        [ -z "$prio" ] && continue
-        ar_rule_get | grep -qF "$(printf '%s\t%s' "$prio" "$sa")" || printf '  + %s  %s\n' "$prio" "$sa"
-    done < <(jq -r '.rules[] | "\(.prio)|\(.selector) \(.action)"' "$AR_JSON" 2>/dev/null)
-    echo "--- forbidden rules present (would-del) ---"
-    local -a frb=()
-    while IFS= read -r f; do [ -n "$f" ] && frb+=("$f"); done         < <(jq -r '.forbidden_rules[]? | "\(.prio // 0)|\(.match)"' "$AR_JSON" 2>/dev/null)
-    while IFS=$'\t' read -r prio sa; do
-        [ -z "$prio" ] && continue
-        ar_spec_rule "$prio" | grep -qF -- "$sa" && continue
-        local f fprio fmatch
-        for f in "${frb[@]}"; do
-            fprio="${f%%|*}"; fmatch="${f#*|}"
-            [ "$fprio" != "0" ] && [ "$fprio" != "$prio" ] && continue
-            if printf '%s' "$sa" | grep -qF -- "$fmatch"; then
-                printf '  - %s  %s\n' "$prio" "$sa"
-                break
-            fi
-        done
-    done < <(ar_rule_get)
-    echo "--- pinned routes missing (would-replace) ---"
-    while IFS=$'\t' read -r dst via dev; do
-        [ -z "$dst" ] && continue
-        local dnorm line match=1
-        dnorm="$(ar_dst_normalize "$dst")"
-        while read -r line; do
-            case "$line" in "$dnorm "*|"$dnorm") ;;
-                *) continue ;;
-            esac
-            [ -n "$via" ] && ! printf '%s' "$line" | grep -qF -- "$via" && continue
-            [ -n "$dev" ] && ! printf '%s' "$line" | grep -qF -- "$dev" && continue
-            match=0; break
-        done < <(ar_route_get)
-        [ "$match" -eq 0 ] || printf '  ~ %s via %s dev %s\n' "$dst" "${via:- -}" "${dev:-?}"
-    done < <(jq -r '.pinned_routes[]? | [.dst, (.via // ""), (.dev // "")] | @tsv' "$AR_JSON" 2>/dev/null)
-    echo ""
-    echo "(read-only: run 'agentic-route enforce' to apply)"
+  AR_DIFF_MODE=check
+  export AR_DIFF_MODE
+  local prio sa line
+  echo "agentic-route diff"
+  echo "Spec: $AR_JSON"
+  echo ""
+  echo "--- rules missing from live (would-add) ---"
+  while IFS='|' read -r prio sa; do
+    [ -z "$prio" ] && continue
+    ar_rule_get | grep -qF "$(printf '%s	%s' "$prio" "$sa")" || printf '  + %s  %s
+' "$prio" "$sa"
+  done < <(jq -r '.rules[] | "\(.prio)|\(.selector) \(.action)"' "$AR_JSON" 2>/dev/null)
+  echo "--- forbidden rules present (would-del) ---"
+  local -a frb=()
+  while IFS= read -r f; do [ -n "$f" ] && frb+=("$f"); done < <(jq -r '.forbidden_rules[]? | "\(.prio // 0)|\(.match)"' "$AR_JSON" 2>/dev/null)
+  while IFS=$'	' read -r prio sa; do
+    [ -z "$prio" ] && continue
+    ar_spec_rule "$prio" | grep -qF -- "$sa" && continue
+    local f fprio fmatch
+    for f in "${frb[@]}"; do
+      fprio="${f%%|*}"; fmatch="${f#*|}"
+      [ "$fprio" != "0" ] && [ "$fprio" != "$prio" ] && continue
+      if printf '%s' "$sa" | grep -qF -- "$fmatch"; then
+        printf '  - %s  %s
+' "$prio" "$sa"
+        break
+      fi
+    done
+  done < <(ar_rule_get)
+  echo "--- pinned routes missing (would-replace) ---"
+  while IFS=$'	' read -r dst via dev; do
+    [ -z "$dst" ] && continue
+    local dnorm line match=1
+    dnorm="$(ar_dst_normalize "$dst")"
+    while read -r line; do
+      case "$line" in "$dnorm "*|"$dnorm") ;;
+        *) continue ;;
+      esac
+      [ -n "$via" ] && ! printf '%s' "$line" | grep -qF -- "$via" && continue
+      [ -n "$dev" ] && ! printf '%s' "$line" | grep -qF -- "$dev" && continue
+      match=0; break
+    done < <(ar_route_get)
+    [ "$match" -eq 0 ] || printf '  ~ %s via %s dev %s
+' "$dst" "${via:- -}" "${dev:-?}"
+  done < <(jq -r '.pinned_routes[]? | [.dst, (.via // ""), (.dev // "")] | @tsv' "$AR_JSON" 2>/dev/null)
+  echo ""
+  echo "(read-only: run 'agentic-route enforce' to apply)"
 }
 
-# cmd_trace - read-only. Trace how a packet to TARGET from SOURCE would route.
-#   agentic-route trace 8.8.8.8 [from 203.0.113.10]
 cmd_trace() {
-    local target="${1:-}"; [ -n "$target" ] || { echo "usage: agentic-route trace <target> [from <source>]" >&2; return 1; }
-    local extra=()
-    if [ "${2:-}" = "from" ] && [ -n "${3:-}" ]; then extra=(from "$3"); fi
-    echo "agentic-route trace $target ${extra[*]}"
-    ip route get "$target" "${extra[@]}" 2>&1
+  local target="${1:-}"; [ -n "$target" ] || { echo "usage: agentic-route trace <target> [from <source>]" >&2; return 1; }
+  local extra=()
+  if [ "${2:-}" = "from" ] && [ -n "${3:-}" ]; then extra=(from "$3"); fi
+  echo "agentic-route trace $target ${extra[*]}"
+  ip route get "$target" "${extra[@]}" 2>&1
 }
 
 cmd_api() {
-    local port="${AGENTIC_ROUTE_API_PORT:-8099}"
-    if ! command -v socat >/dev/null 2>&1; then
-        ar_die "socat is required for api"
-    fi
-    ar_log "API listening on :$port"
-    while true; do
-        socat TCP-LISTEN:"$port",reuseaddr,fork SYSTEM:"$0 api-handler" 2>/dev/null
-    done
+  local port="${AGENTIC_ROUTE_API_PORT:-8099}"
+  if ! command -v socat >/dev/null 2>&1; then
+    ar_die "socat is required for api"
+  fi
+  ar_log "API listening on :$port"
+  while true; do
+    socat TCP-LISTEN:"$port",reuseaddr,fork SYSTEM:"$0 api-handler" 2>/dev/null
+  done
 }
 
 cmd_api_handler() {
-    local path
-    IFS=' ' read -r _ path _ || true
-    printf 'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n'
-    case "$path" in
-        /api/v1/status) cmd_status 2>&1 | jq -Rs '{status:"ok", text:.}' ;;
-        /api/v1/check) cmd_check >/dev/null 2>&1; printf '{"clean":%s}\n' "$([ "$?" -eq 0 ] && echo true || echo false)" ;;
-        /api/v1/enforce) cmd_enforce >/dev/null 2>&1; echo '{"enforced":true}' ;;
-        *) echo '{"error":"not found"}' ;;
-    esac
+  local path
+  IFS=' ' read -r _ path _ || true
+  printf 'HTTP/1.1 200 OK
+Content-Type: application/json
+
+'
+  case "$path" in
+    /api/v1/status) cmd_status 2>&1 | jq -Rs '{status:"ok", text: .}' ;;
+    /api/v1/check)
+      AR_DIFF_MODE=check
+      export AR_DIFF_MODE
+      local n
+      n=$(ar_apply_once) || true
+      jq -n --argjson n "$n" '{status:"ok", drift:$n}' ;;
+    /api/v1/enforce)
+      AR_DIFF_MODE=enforce
+      export AR_DIFF_MODE
+      local n
+      n=$(ar_apply_once) || true
+      jq -n --argjson n "$n" '{status:"ok", corrected:$n}' ;;
+    /api/v1/diff)
+      AR_DIFF_MODE=check
+      export AR_DIFF_MODE
+      local out
+      out=$(cmd_diff 2>&1)
+      printf '%s' "$out" | jq -Rs '{status:"ok", text:.}' ;;
+    *)
+      printf 'HTTP/1.1 404 Not Found
+Content-Type: application/json
+
+'
+      jq -n '{error:"not found"}' ;;
+  esac
 }
 
-cmd_mcp() {
-    # READ-ONLY MCP control plane. Mutation is deliberately NOT exposed here:
-    # the apply path (enforce) stays a CLI/operator action wrapped by net-safe.
-    # An MCP client can SEE and DIAGNOSE routing, but never change the kernel.
-    while IFS= read -r line || [ -n "$line" ]; do
-        [ -z "$line" ] && continue
-        local method req_id tool out
-        method=$(printf '%s' "$line" | jq -r '.method // empty' 2>/dev/null)
-        req_id=$(printf '%s' "$line" | jq -c '.id // 1' 2>/dev/null)
-        case "$method" in
-            initialize)
-                printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"agentic-route","version":"1.1.0"}}}\n' "$req_id" ;;
-            notifications/*) ;;
-            ping) printf '{"jsonrpc":"2.0","id":%s,"result":{}}\n' "$req_id" ;;
-            tools/list)
-                printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"route_status","description":"Show live and desired kernel rules and routes (read-only)","inputSchema":{"type":"object","properties":{},"required":[]}},{"name":"route_check","description":"Report whether routing has drifted from the spec (read-only, no mutation)","inputSchema":{"type":"object","properties":{},"required":[]}},{"name":"route_diff","description":"Precise diff of spec vs live: rules to add, forbidden rules to remove, pinned routes to replace (read-only)","inputSchema":{"type":"object","properties":{},"required":[]}},{"name":"route_trace","description":"Trace how a packet to a target IP would route, optionally from a source IP (read-only)","inputSchema":{"type":"object","properties":{"target":{"type":"string","description":"destination IP"},"source":{"type":"string","description":"optional source IP"}},{"required":["target"]}}]}}\n' "$req_id" ;;
-            tools/call)
-                tool=$(printf '%s' "$line" | jq -r '.params.name // empty' 2>/dev/null)
-                case "$tool" in
-                    route_status) out=$(cmd_status 2>&1) ;;
-                    route_check) if cmd_check 2>&1; then out="clean"; else out="drift detected"; fi ;;
-                    route_diff) out=$(cmd_diff 2>&1) ;;
-                    route_trace)
-                        local tg src
-                        tg=$(printf '%s' "$line" | jq -r '.params.arguments.target // empty' 2>/dev/null)
-                        src=$(printf '%s' "$line" | jq -r '.params.arguments.source // empty' 2>/dev/null)
-                        if [ -n "$src" ]; then out=$(cmd_trace "$tg" from "$src" 2>&1); else out=$(cmd_trace "$tg" 2>&1); fi
-                        ;;
-                    *) printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32601,"message":"Unknown tool"}}\n' "$req_id"; continue ;;
-                esac
-                printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":%s}]}}\n' "$req_id" "$(printf '%s' "$out" | jq -Rs .)" ;;
-            *) printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32601,"message":"Method not supported"}}\n' "$req_id" ;;
-        esac
-    done
-}
-
-cmd_help() {
-    cat <<'HELP'
-agentic-route: declarative kernel policy-routing reconciler
-
-Usage: agentic-route <command>
-
-Commands:
-  status      Show desired and live rules and routes
-  check       Report drift without changing kernel state
-  diff        Precise read-only diff of spec vs live routing
-  trace       Trace how a packet routes (ip route get wrapper)
-  enforce     Apply surgical check-then-act reconciliation
-  reconcile   One-shot idempotent reconcile (discovers + intent + applies)
-  daemon      Event-driven daemon (inotify + ip monitor with FIFO)
-  monitor     Legacy: reconcile on ip monitor rule/route/link events
-  mcp         Start read-only stdio MCP JSON-RPC server
-  api         Start local REST API server
-HELP
-}
-
-main() {
-    local cmd="${1:-enforce}"
-    case "$cmd" in
-        status) cmd_status ;;
-        check) cmd_check ;;
-        diff) cmd_diff ;;
-        trace) shift; cmd_trace "$@" ;;
-        enforce) cmd_enforce ;;
-        reconcile) cmd_reconcile "$@" ;;
-        daemon) cmd_daemon "$@" ;;
-        monitor) cmd_monitor ;;
-        mcp) cmd_mcp ;;
-        api) cmd_api ;;
-        api-handler) cmd_api_handler ;;
-        help|-h|--help) cmd_help ;;
-        *) echo "Unknown command: $cmd" >&2; cmd_help; return 1 ;;
-    esac
-}
-main "$@"
+case "${1:-enforce}" in
+  enforce) cmd_enforce ;;
+  check)   cmd_check ;;
+  status)  cmd_status ;;
+  diff)    cmd_diff ;;
+  trace)   cmd_trace "${@:2}" ;;
+  monitor|daemon) cmd_monitor ;;
+  api)     cmd_api ;;
+  api-handler) cmd_api_handler ;;
+  reconcile) cmd_reconcile "$@" ;;
+  -h|--help|help) usage ;;
+  *) usage ;;
+esac
 
