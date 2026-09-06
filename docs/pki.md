@@ -71,8 +71,11 @@ done
 agent=hermes
 openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
   -subj "/CN=agent-$agent" -keyout clients/$agent.key -out clients/$agent.csr
+#    rustls (webpki) rejects X.509 v1 certificates, and `openssl x509 -req`
+#    emits v1 unless extensions are present, so always pass an extfile.
 openssl x509 -req -in clients/$agent.csr -CA ca.crt -CAkey ca.key \
-  -CAcreateserial -days 90 -out clients/$agent.crt
+  -CAcreateserial -days 90 -out clients/$agent.crt \
+  -extfile <(printf 'basicConstraints=CA:FALSE\nkeyUsage=digitalSignature\nextendedKeyUsage=clientAuth\n')
 ```
 
 Keys are PKCS#8 PEM (`openssl req -newkey` default); the Rust loader accepts
