@@ -8,9 +8,9 @@
 
 set -euo pipefail
 
-LIB="/usr/local/lib/agentic-route/core.sh"
+LIB="${AGENTIC_ROUTE_LIB:-/usr/local/lib/agentic-route/core.sh}"
 INTENT_FILE="${AGENTIC_ROUTE_INTENT:-/etc/agentic-route/intent.json}"
-STATE_DIR="/run/agentic-route"
+STATE_DIR="${AGENTIC_ROUTE_STATE_DIR:-/run/agentic-route}"
 STATE_FILE="$STATE_DIR/state.json"
 
 [ -f "$LIB" ] || { echo "Missing engine: $LIB" >&2; exit 2; }
@@ -58,7 +58,14 @@ build_effective_spec() {
     
     ($custom | map(select(. as $c | $filtered_disc | map(.selector_action == ($c.selector + " " + $c.action)) | any | not))) as $to_add |
     
-    ($filtered_disc + ($to_add | map({prio, selector_action: (.selector + " " + .action)}))) as $effective_rules |
+    # core.sh consumes rules as {prio, selector, action}; split discovered
+    # selector_action at the first action keyword so the engine can fingerprint
+    # it as "\(.selector) \(.action)" and match the live line byte-for-byte.
+    (($filtered_disc | map(
+      (.selector_action | capture("^(?<selector>.*?) ?(?<action>(lookup|goto|nat|blackhole|unreachable|prohibit|throw)( .*)?)$")
+        // {selector: .selector_action, action: ""}) as $sa
+      | {prio, selector: $sa.selector, action: $sa.action}
+    )) + $to_add) as $effective_rules |
     
     ($intent.pinned_routes // []) as $pinned |
     

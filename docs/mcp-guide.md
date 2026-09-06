@@ -5,16 +5,20 @@ title: MCP Integration
 
 # MCP Integration
 
-Start read-write MCP server:
+Start the read-only MCP server:
 ```bash
 agentic-route mcp
 ```
 
 Tools exposed:
-- `route_status` — all rules, routes, drift
-- `route_reconcile` — run one-shot reconciliation
-- `route_daemon_status` — daemon state
-- `route_intent_get` — current intent
-- `route_intent_set` — update intent
+- `route_status` — desired vs live rules/routes plus drift count
+- `route_check` — drift detection, no mutation
+- `route_diff` — would-add / would-del / would-replace, no mutation
+- `route_trace` — `ip route get <target> [from <src>]`
 
-EOF 2>&1
+Mutation (`enforce`, `reconcile`, intent edits) is deliberately **not**
+exposed over MCP: an agent that can read routing state but not change it
+cannot lock the host out. Mutation goes through the CLI or the mTLS REST API.
+
+Reads `AGENTIC_ROUTE_CONF` (default `/etc/agentic-route/routes.json`).
+See [api-reference.md](api-reference.md) for the full contract.
