@@ -4,7 +4,7 @@ startCommand:
   configSchema:
     type: object
     properties: {}
-    description: Kernel policy-routing lock and net-safe deadman switch. Exposes MCP tools (route_status, route_check, route_enforce, route_monitor) over stdio JSON-RPC.
+    description: Kernel policy-routing lock and net-safe deadman switch. Exposes read-only MCP tools (route_status, route_check, route_diff, route_trace) over stdio JSON-RPC; mutation is CLI/mTLS-REST only.
   commandFunction: |-
     (config) => ({
       command: 'agentic-route',

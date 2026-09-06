@@ -181,7 +181,7 @@ npx -y @smithery/cli install @dedsecorg/agentic-route
 | `agentic-route daemon` | **Event-driven daemon** (inotify + ip monitor + FIFO) |
 | `agentic-route monitor` | Legacy: `ip monitor | while read` loop |
 | `agentic-route mcp` | Read-only stdio MCP JSON-RPC server |
-| `agentic-route api` | Local REST API server (port 8099) |
+| `agentic-route api` | mTLS REST API server (port 8099, client cert required; see [docs/pki.md](docs/pki.md)) |
 
 ### Daemon vs Reconcile
 

@@ -40,37 +40,27 @@ Options:
 - `--interval <ms>` — debounce interval (default: 200ms)
 - `--state-dir <path>` — state directory (default: /run/agentic-route)
 
-## agentic-route intent get
-
-Show current intent configuration.
-
-```bash
-agentic-route intent get
-```
-
-## agentic-route intent set
-
-Update intent file from stdin or file.
-
-```bash
-agentic-route intent set <file>
-# or
-cat intent.json | agentic-route intent set
-```
-
 ## agentic-route mcp
 
-Start stdio MCP JSON-RPC server for AI agent integration.
+Start the stdio MCP JSON-RPC server for AI agent integration. It is
+**read-only**: no tool mutates kernel state. Mutation (`enforce`,
+`reconcile`) stays a CLI/operator action or goes through the mTLS REST API.
 
 ```bash
 agentic-route mcp
 ```
 
 Tools exposed:
-- `route_status`
-- `route_reconcile`
-- `route_daemon_status`
-- `route_intent_get`
-- `route_intent_set`
+- `route_status` — desired vs live rules/routes plus drift count
+- `route_check` — drift detection, no mutation
+- `route_diff` — would-add / would-del / would-replace, no mutation
+- `route_trace` — `ip route get <target> [from <src>]`
 
-EOF 2>&1
+Methods: `initialize`, `ping`, `tools/list`, `tools/call`. Reads
+`AGENTIC_ROUTE_CONF` (default `/etc/agentic-route/routes.json`).
+
+## agentic-route api
+
+mTLS REST API on `AGENTIC_ROUTE_API_PORT` (default 8099). Requires socat with
+OpenSSL and a client certificate signed by `AGENTIC_ROUTE_TLS_CA`; see
+[PKI](pki.md) and [API Reference](api-reference.md).

@@ -2,14 +2,17 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 dedsecorg
 # agentic-route-daemon - event-driven reconciler with FIFO multiplexing
-# Watches /etc/agentic-route/intent.json (inotify) and kernel routing (ip monitor)
+# Watches the intent file (AGENTIC_ROUTE_INTENT, default /etc/agentic-route/intent.json)
+# via inotify on its directory, plus kernel routing (ip monitor)
 # Runs agentic-route-reconcile on events with 200ms debounce
 
 set -eo pipefail
 
 RUN_DIR="/run/agentic-route"
 FIFO="$RUN_DIR/events.fifo"
-INTENT_DIR="/etc/agentic-route"
+INTENT_FILE="${AGENTIC_ROUTE_INTENT:-/etc/agentic-route/intent.json}"
+INTENT_DIR="$(dirname "$INTENT_FILE")"
+INTENT_NAME="$(basename "$INTENT_FILE")"
 RECONCILE_BIN="/usr/local/bin/agentic-route-reconcile"
 
 mkdir -p "$RUN_DIR" "$INTENT_DIR"
@@ -28,16 +31,15 @@ ip monitor rule route link 2>/dev/null > "$FIFO" &
 exec 3<> "$FIFO"
 
 ar_log() { echo "[agentic-route-daemon] $*" >&2; }
-ar_log "daemon started, watching $INTENT_DIR and kernel netlink"
+ar_log "daemon started, watching $INTENT_FILE and kernel netlink"
 
 # Unified debounced loop reading strictly from FD 3
 while read -r event <&3; do
   # Drain burst events (200ms window)
   while read -r -t 0.2 -u 3 _; do :; done
   
-  # Only reconcile on intent.json changes or kernel events
   case "$event" in
-    intent.json|*.json)
+    "$INTENT_NAME")
       ar_log "intent file changed: $event"
       ;;
     *)
