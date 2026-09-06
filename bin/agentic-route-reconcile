@@ -53,7 +53,7 @@ build_effective_spec() {
     ($intent.custom_rules // []) as $custom |
     
     ($disc_rules | map(select(. as $r | $forbidden | map(
-      if (.prio // 0) != 0 then .prio == $r.prio and (.match | test($r.selector_action)) else (.match | test($r.selector_action)) end
+      if (.prio // 0) != 0 then .prio == $r.prio and ($r.selector_action | contains(.match)) else ($r.selector_action | contains(.match)) end
     ) | any) | not)) as $filtered_disc |
     
     ($custom | map(select(. as $c | $filtered_disc | map(.selector_action == ($c.selector + " " + $c.action)) | any) | not)) as $to_add |
