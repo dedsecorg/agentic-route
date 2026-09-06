@@ -156,3 +156,4 @@ ar_apply_once() {
   # Emit total drift count to stdout (callers capture it), zero-pad defensively.
   printf '%d\n' $(( (rcount + 0) + (pcount + 0) ))
 }
+
