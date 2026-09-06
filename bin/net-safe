@@ -128,8 +128,10 @@ restore_state() {
     if [ -n "$gw" ]; then
         ip route replace default via "$gw" dev "$dev" onlink 2>/dev/null || true
     fi
-    sysctl -w net.ipv4.conf.all.rp_filter=2 >/dev/null 2>&1 || true
-    sysctl -w net.ipv4.conf.default.rp_filter=2 >/dev/null 2>&1 || true
+    local rpf=()
+    [ -f "$SYS_SNAP" ] && mapfile -t rpf < "$SYS_SNAP"
+    sysctl -w net.ipv4.conf.all.rp_filter="${rpf[0]:-2}" >/dev/null 2>&1 || true
+    sysctl -w net.ipv4.conf.default.rp_filter="${rpf[1]:-2}" >/dev/null 2>&1 || true
     log "rollback complete"
 }
 
