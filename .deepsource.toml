@@ -1,0 +1,34 @@
+version = 1
+
+exclude_patterns = [
+  "vendor/**",
+  "_site/**",
+  "node_modules/**",
+  ".bundle/**",
+  "Gemfile.lock",
+  "**/*.lock",
+]
+
+test_patterns = [
+  "tests/**",
+  "test_cli.sh",
+]
+
+[[analyzers]]
+name = "ruby"
+enabled = true
+
+[[analyzers]]
+name = "shell"
+enabled = true
+
+  [analyzers.meta]
+  dialect = "bash"
+
+[[analyzers]]
+name = "javascript"
+enabled = true
+
+  [analyzers.meta]
+  environment = ["nodejs"]
+  module_system = "commonjs"
