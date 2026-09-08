@@ -7,6 +7,10 @@
 [![Multi-Arch](https://img.shields.io/badge/arch-amd64%20%7C%20arm64-blue)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Context7](https://img.shields.io/badge/Context7-Indexed-brightgreen)](https://context7.com/dedsecorg/agentic-route)
+[![DeepSource](https://app.deepsource.com/gh/dedsecorg/agentic-route.svg/?label=active+issues&show_trend=true&token=5t327pH8ad7TT7Qnf6UsaS1G)](https://app.deepsource.com/gh/dedsecorg/agentic-route/)
+[![DeepSource](https://app.deepsource.com/gh/dedsecorg/agentic-route.svg/?label=code+coverage&show_trend=true&token=5t327pH8ad7TT7Qnf6UsaS1G)](https://app.deepsource.com/gh/dedsecorg/agentic-route/)
+[![DeepSource](https://app.deepsource.com/gh/dedsecorg/agentic-route.svg/?label=resolved+issues&show_trend=true&token=5t327pH8ad7TT7Qnf6UsaS1G)](https://app.deepsource.com/gh/dedsecorg/agentic-route/)
+[![CodeRabbit Pull Request Reviews](https://img.shields.io/coderabbit/prs/github/dedsecorg/agentic-route?utm_source=oss&utm_medium=github&utm_campaign=dedsecorg%2Fagentic-route&labelColor=171717&color=FF570A&link=https%3A%2F%2Fcoderabbit.ai&label=CodeRabbit+Reviews)](https://coderabbit.ai?utm_source=oss&utm_campaign=dedsecorg%2Fagentic-route)
 
 ---
 
