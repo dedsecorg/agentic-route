@@ -56,6 +56,7 @@ case "$*" in
 esac
 EOF
 for t in sysctl iptables-save iptables-restore logger; do
+    # shellcheck disable=SC2016 # $*,${SHIM_LOG:?} are intentionally literal (generated wrapper)
     printf '#!/usr/bin/env bash\nprintf "%%s %%s\\n" "%s" "$*" >> "${SHIM_LOG:?}"\n' "$t" > "$SHIM/$t"
 done
 chmod +x "$SHIM"/*

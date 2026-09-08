@@ -86,8 +86,11 @@ ar_reconcile_rules() {
     prio="${entry%%|*}"; sa="${entry#*|}"
     if [ "$AR_DIFF_MODE" = "enforce" ]; then
       # shellcheck disable=SC2086
-      ip rule add priority "$prio" $sa 2>/dev/null && ar_log "add rule $prio: $sa" \
-        || ar_log "SKIP add rule $prio (exists or invalid): $sa"
+      if ip rule add priority "$prio" $sa 2>/dev/null; then
+        ar_log "add rule $prio: $sa"
+      else
+        ar_log "SKIP add rule $prio (exists or invalid): $sa"
+      fi
     else
       ar_log "would-add rule $prio: $sa"
     fi
