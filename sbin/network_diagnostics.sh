@@ -38,7 +38,7 @@ else
 fi
 
 print_header 4 "Checking Core Services Status..."
-for svc in dnsdist pihole-FTL tailscaled nordvpnd wg-quick@proton0 agentic-route; do
+for svc in dnsdist pihole-FTL tailscaled nordvpnd wg-quick@proton0 agentic-route agentic-route-daemon; do
     if systemctl is-active --quiet "$svc"; then
         echo -e "$svc: ${GREEN}RUNNING${NC}"
     else
