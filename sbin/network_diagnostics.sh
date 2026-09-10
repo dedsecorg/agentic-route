@@ -120,7 +120,7 @@ fi
 
 # Check hermes-route health
 print_header 7 "Routing State Health..."
-hermes-route check 2>&1
+agentic-route check 2>&1
 
 # Alert on ProtonVPN daemon rules
 rogue_rules=$(ip rule show 2>/dev/null | grep -c -E "31298|31299|suppress_prefixlength 0|245447468" 2>/dev/null || true)
