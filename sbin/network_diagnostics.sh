@@ -38,7 +38,7 @@ else
 fi
 
 print_header 4 "Checking Core Services Status..."
-for svc in dnsdist pihole-FTL tailscaled nordvpnd wg-quick@proton0 hermes-route; do
+for svc in dnsdist pihole-FTL tailscaled nordvpnd wg-quick@proton0 agentic-route agentic-route-daemon; do
     if systemctl is-active --quiet "$svc"; then
         echo -e "$svc: ${GREEN}RUNNING${NC}"
     else
@@ -128,9 +128,16 @@ else
     echo -e "  Data egress (8.8.8.8): ${YELLOW}via $data_route${NC}"
 fi
 
-# Check hermes-route health
+# Check agentic-route health
 print_header 7 "Routing State Health..."
-hermes-route check 2>&1
+if agentic_route_check_output=$(agentic-route check 2>&1); then
+    echo "$agentic_route_check_output"
+    echo -e "  Routing state: ${GREEN}PASS${NC}"
+else
+    agentic_route_check_status=$?
+    echo "$agentic_route_check_output"
+    echo -e "  Routing state: ${RED}FAIL (exit code: $agentic_route_check_status)${NC}"
+fi
 
 # Alert on ProtonVPN daemon rules
 rogue_rules=$(ip rule show 2>/dev/null | grep -c -E "31298|31299|suppress_prefixlength 0|245447468" 2>/dev/null || true)
