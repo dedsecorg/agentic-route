@@ -22,4 +22,8 @@ tools:
   shellcheck:
     enabled: true
     file_extensions:
+<<<<<<< HEAD
       - ".sh"
+=======
+      - ".sh"
+>>>>>>> origin/master
