@@ -73,11 +73,13 @@ test_dns() {
 
 test_dns "Host OS (resolv.conf)" "" ""
 test_dns "Local port 53 (Pi-hole)" "127.0.0.1" ""
+test_dns "Nebula mesh DNS (192.168.100.1)" "192.168.100.1" ""
 test_dns "Local port 5330 (dnsdist)" "127.0.0.1" "5330"
 test_dns "Upstream (Quad9)" "9.9.9.9" ""
 test_dns "Unbound (port 5335)" "127.0.0.1" "5335"
 test_dns "Stubby (port 5360)" "127.0.0.1" "5360"
 test_dns "dnscrypt (port 5354)" "127.0.0.1" "5354"
+test_dns "ProtonVPN DNS (10.2.0.1)" "10.2.0.1" ""
 
 print_header 6 "Testing VPN Separation (DNS vs Data)..."
 
@@ -110,6 +112,14 @@ for upstream in 1.1.1.1 9.9.9.9; do
     fi
 done
 
+# Check nebula mesh DNS
+nebula_route=$(ip route get 192.168.100.1 2>/dev/null | head -1)
+if echo "$nebula_route" | grep -q "nebula1" || echo "$nebula_route" | grep -qw "local"; then
+    echo -e "  Nebula mesh DNS (192.168.100.1): ${GREEN}via nebula1 (local)${NC}"
+else
+    echo -e "  Nebula mesh DNS (192.168.100.1): ${YELLOW}via $nebula_route${NC}"
+fi
+
 # Check that general data traffic still goes through NordVPN
 data_route=$(ip route get 8.8.8.8 2>/dev/null | head -1)
 if echo "$data_route" | grep -q "nordlynx"; then
@@ -120,7 +130,7 @@ fi
 
 # Check hermes-route health
 print_header 7 "Routing State Health..."
-agentic-route check 2>&1
+hermes-route check 2>&1
 
 # Alert on ProtonVPN daemon rules
 rogue_rules=$(ip rule show 2>/dev/null | grep -c -E "31298|31299|suppress_prefixlength 0|245447468" 2>/dev/null || true)
