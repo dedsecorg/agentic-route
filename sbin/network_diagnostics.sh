@@ -130,7 +130,14 @@ fi
 
 # Check agentic-route health
 print_header 7 "Routing State Health..."
-agentic-route check 2>&1
+if agentic_route_check_output=$(agentic-route check 2>&1); then
+    echo "$agentic_route_check_output"
+    echo -e "  Routing state: ${GREEN}PASS${NC}"
+else
+    agentic_route_check_status=$?
+    echo "$agentic_route_check_output"
+    echo -e "  Routing state: ${RED}FAIL (exit code: $agentic_route_check_status)${NC}"
+fi
 
 # Alert on ProtonVPN daemon rules
 rogue_rules=$(ip rule show 2>/dev/null | grep -c -E "31298|31299|suppress_prefixlength 0|245447468" 2>/dev/null || true)
