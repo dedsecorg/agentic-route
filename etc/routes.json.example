@@ -12,5 +12,18 @@
   "pinned_routes": [
     { "dst": "198.51.100.7/32", "via": "192.0.2.1", "dev": "eth0", "reason": "Keep a VPN endpoint reachable outside the tunnel" },
     { "dst": "default", "via": "192.0.2.1", "dev": "eth0", "reason": "Keep fallback egress present" }
-  ]
+  ],
+  "table_routes": [
+    { "dst": "10.2.0.1/32", "dev": "proton0", "table": "protonvpn", "reason": "DNS queries to ProtonVPN DNS route through proton0" }
+  ],
+  "dns_upstream_guard": {
+    "comment": "Policy rules that force DNS resolver upstream IPs (Cloudflare, Quad9, etc.) into the main table so they bypass VPN tunnels that block port 853 (DoT). Auto-generated rules with prio 20000.",
+    "upstreams": [
+      { "ip": "1.1.1.1", "reason": "Cloudflare primary" },
+      { "ip": "1.0.0.1", "reason": "Cloudflare secondary" },
+      { "ip": "9.9.9.9", "reason": "Quad9 primary" },
+      { "ip": "149.112.112.112", "reason": "Quad9 secondary" },
+      { "ip": "185.70.40.134", "reason": "ProtonVPN DNS" }
+    ]
+  }
 }

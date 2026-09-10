@@ -116,10 +116,15 @@ ar_dst_normalize() {
 }
 
 ar_reconcile_routes() {
-  local total=0 dst via dev raw_dst
+  local total=0 dst via dev raw_dst table
   # jq emits dst<TAB>via<TAB>dev per pinned route.
+  # NOTE: bash `read -r` with IFS=$'\t' collapses consecutive tabs, so when
+  # a field is empty, subsequent fields shift. Use "-" sentinel for empty fields.
   while IFS=$'\t' read -r raw_dst via dev; do
     [ -z "$raw_dst" ] && continue
+    # Strip sentinel placeholders for empty via/dev
+    [ "$via" = "-" ] && via=""
+    [ "$dev" = "-" ] && dev=""
     dst="$(ar_dst_normalize "$raw_dst")"
 
     # Match a live `ip route show` line whose dst-prefix equals `dst`.
@@ -147,7 +152,43 @@ ar_reconcile_routes() {
     else
       ar_log "would-replace route: $raw_dst via ${via:-?} dev ${dev:-?}"
     fi
-  done < <(jq -r '.pinned_routes[]? | [.dst, (.via // ""), (.dev // "")] | @tsv' "$AR_JSON" 2>/dev/null)
+  done < <(jq -r '.pinned_routes[]? | [.dst, (.via // "-"), (.dev // "-")] | @tsv' "$AR_JSON" 2>/dev/null)
+
+  # --- table-scoped routes (e.g. 10.2.0.1/32 dev proton0 table protonvpn) ---
+  while IFS=$'\t' read -r raw_dst via dev table; do
+    [ -z "$raw_dst" ] && continue
+    # Strip sentinel placeholders for empty via/dev/table
+    [ "$via" = "-" ] && via=""
+    [ "$dev" = "-" ] && dev=""
+    [ "$table" = "-" ] && table=""
+    dst="$(ar_dst_normalize "$raw_dst")"
+
+    # Check live state in the specific routing table
+    local match=1 line
+    while read -r line; do
+      case "$line" in
+        "$dst "*|"$dst") ;;
+        *) continue ;;
+      esac
+      [ -n "$via" ] && ! printf '%s' "$line" | grep -qF -- "$via" && continue
+      [ -n "$dev" ] && ! printf '%s' "$line" | grep -qF -- "$dev" && continue
+      match=0; break
+    done < <(ip -4 route show table "$table" 2>/dev/null | awk '{ gsub(/[ \t]+/," ",$0); sub(/^ +/,"",$0); print }')
+
+    [ "$match" -eq 0 ] && continue
+
+    total=$((total+1))
+    if [ "$AR_DIFF_MODE" = "enforce" ]; then
+      local -a args=()
+      if [ "$raw_dst" = "default" ]; then args+=("default"); else args+=("$raw_dst"); fi
+      [ -n "$via" ] && args+=("via" "$via")
+      [ -n "$dev" ] && args+=("dev" "$dev")
+      args+=("table" "$table")
+      ip route replace "${args[@]}" 2>/dev/null && ar_log "replace route: ${args[*]}"
+    else
+      ar_log "would-replace route: $raw_dst via ${via:-?} dev ${dev:-?} table ${table:-?}"
+    fi
+  done < <(jq -r '.table_routes[]? | [.dst, (.via // "-"), (.dev // "-"), (.table // "-")] | @tsv' "$AR_JSON" 2>/dev/null)
 
   printf '%d' "$total"
 }
