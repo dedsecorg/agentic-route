@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 dedsecorg
 # agentic-route-reconcile - one-shot idempotent reconciliation
-# Reads intent from /etc/agentic-route/intent.json, discovers kernel state,
+# Reads intent from AGENTIC_ROUTE_INTENT (intent.json) and declarative spec
+# from AGENTIC_ROUTE_CONF (routes.json), discovers kernel state,
 # computes desired state, applies only if drift exists.
 # Exit codes: 0 = clean, 1 = drift corrected, 2 = error
 
@@ -10,6 +11,7 @@ set -euo pipefail
 
 LIB="${AGENTIC_ROUTE_LIB:-/usr/local/lib/agentic-route/core.sh}"
 INTENT_FILE="${AGENTIC_ROUTE_INTENT:-/etc/agentic-route/intent.json}"
+SPEC_FILE="${AGENTIC_ROUTE_CONF:-/etc/agentic-route/routes.json}"
 STATE_DIR="${AGENTIC_ROUTE_STATE_DIR:-/run/agentic-route}"
 STATE_FILE="$STATE_DIR/state.json"
 
@@ -33,42 +35,54 @@ discover_routes() {
   ip -4 route show 2>/dev/null | awk '{ gsub(/[ \t]+/," ",$0); sub(/^ +/,"",$0); print }'
 }
 
-# --- Build effective spec from intent + discovered ---
+# --- Build effective spec from routes.json + intent + discovered ---
+# Merges declarative rules (routes.json .rules) with discovered live rules
+# (minus forbidden), plus ensures custom_rules are present. This makes the
+# daemon enforce the full desired state, not just incremental intent changes.
 build_effective_spec() {
   local intent_file="$1"
-  local discovered_rules="$2"
-  local discovered_routes="$3"
+  local spec_file="${AGENTIC_ROUTE_CONF:-/etc/agentic-route/routes.json}"
+  local discovered_rules
+  local discovered_routes
+  
+  # Support both old 3-arg call (intent discovered_rules discovered_routes)
+  # and new 4-arg call (intent spec_file discovered_rules discovered_routes)
+  if [ $# -eq 4 ]; then
+    spec_file="$2"
+    discovered_rules="$3"
+    discovered_routes="$4"
+  else
+    discovered_rules="$2"
+    discovered_routes="$3"
+  fi
   
   local tmp_spec
   tmp_spec=$(mktemp -p "$STATE_DIR")
   
-  # Use jq to construct effective spec combining discovered + intent
-  jq -n     --argjson intent "$(cat "$intent_file")"     --arg discovered_rules "$discovered_rules"     --arg discovered_routes "$discovered_routes"     '
+  jq -n \
+      --argjson intent "$(cat "$intent_file")" \
+      --argjson spec "$(cat "$spec_file" 2>/dev/null || echo '{}')" \
+      --arg discovered_rules "$discovered_rules" \
+      --arg discovered_routes "$discovered_routes" \
+      '
     ($discovered_rules | split("\n") | map(select(length > 0)) | map(
       split("\t") | {prio: (.[0] | tonumber), selector_action: .[1]}
     )) as $disc_rules |
-    
-    ($intent.forbidden_rules // []) as $forbidden |
-    
+    ($intent.forbidden_rules // $spec.forbidden_rules // []) as $forbidden |
+    ($spec.rules // []) as $declarative_rules |
     ($intent.custom_rules // []) as $custom |
-    
     ($disc_rules | map(select(. as $r | $forbidden | map(
       .match as $m | if (.prio // 0) != 0 then .prio == $r.prio and ($r.selector_action | contains($m)) else ($r.selector_action | contains($m)) end
     ) | any | not))) as $filtered_disc |
-    
-    ($custom | map(select(. as $c | $filtered_disc | map(.selector_action == ($c.selector + " " + $c.action)) | any | not))) as $to_add |
-    
-    # core.sh consumes rules as {prio, selector, action}; split discovered
-    # selector_action at the first action keyword so the engine can fingerprint
-    # it as "\(.selector) \(.action)" and match the live line byte-for-byte.
     (($filtered_disc | map(
       (.selector_action | capture("^(?<selector>.*?) ?(?<action>(lookup|goto|nat|blackhole|unreachable|prohibit|throw)( .*)?)$")
         // {selector: .selector_action, action: ""}) as $sa
       | {prio, selector: $sa.selector, action: $sa.action}
-    )) + $to_add) as $effective_rules |
-    
-    ($intent.pinned_routes // []) as $pinned |
-    
+    )) + $custom | map({prio, selector, action})) as $disc_rules_parsed |
+    ($declarative_rules + $disc_rules_parsed | unique_by(.prio) | sort_by(.prio)) as $merged |
+    ($custom | map(select(. as $c | $merged | map(.selector == $c.selector and .action == $c.action) | any | not))) as $to_add |
+    ($merged + $to_add) as $effective_rules |
+    ($intent.pinned_routes // $spec.pinned_routes // []) as $pinned |
     {version: 1, rules: $effective_rules, pinned_routes: $pinned, forbidden_rules: $forbidden}
     ' > "$tmp_spec"
   
@@ -84,7 +98,7 @@ main() {
   discovered_routes=$(discover_routes)
   
   local effective_spec
-  effective_spec=$(build_effective_spec "$INTENT_FILE" "$discovered_rules" "$discovered_routes")
+  effective_spec=$(build_effective_spec "$INTENT_FILE" "$SPEC_FILE" "$discovered_rules" "$discovered_routes")
   
   AR_JSON="$effective_spec"
   AR_DIFF_MODE="enforce"
@@ -96,7 +110,14 @@ main() {
   rm -f "$effective_spec"
   
   # Update state.json
-  jq -n     --arg rules "$discovered_rules"     --arg routes "$discovered_routes"     --argjson drift "$drift"     '{discovered_rules: ($rules | split("\n") | map(select(length > 0))), discovered_routes: ($routes | split("\n") | map(select(length > 0))), last_reconcile: now | todateiso8601, drift_corrected: $drift}'     > "$STATE_FILE"
+  jq -n \
+      --arg rules "$discovered_rules" \
+      --arg routes "$discovered_routes" \
+      --argjson drift "$drift" \
+      '{discovered_rules: ($rules | split("\n") | map(select(length > 0))),
+        discovered_routes: ($routes | split("\n") | map(select(length > 0))),
+        last_reconcile: (now | todateiso8601),
+        drift_corrected: $drift}' > "$STATE_FILE"
   
   if [ "$drift" -eq 0 ]; then
     ar_log "clean: live state matches intent"
@@ -108,4 +129,3 @@ main() {
 }
 
 main "$@"
-
