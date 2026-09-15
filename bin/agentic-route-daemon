@@ -47,12 +47,8 @@ while read -r event <&3; do
       ;;
   esac
   
-  # Run idempotent reconciliation
-  if "$RECONCILE_BIN"; then
-    :  # clean, no drift
-  else
-    ar_log "drift corrected"
-  fi
+  # Run idempotent reconciliation (exit 1 = drift corrected, not an error)
+  "$RECONCILE_BIN" || true
 done
 
 ar_log "daemon stopped"
