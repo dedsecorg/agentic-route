@@ -41,8 +41,12 @@ while read -r event <&3; do
   esac
   
   # Reconcile returns 0 (clean) or 1 (drift corrected); both are normal.
-  # `set -e` would kill the daemon on exit 1, so suppress non-zero exit.
-  "$RECONCILE_BIN" || true
+  # Exit status 2 (error) indicates a real failure that should be logged.
+  "$RECONCILE_BIN" || rc=$?
+  if [ "${rc:-0}" -eq 2 ]; then
+    log "reconcile error (exit $rc)"
+  fi
+  rc=0
 done
 ```
 
@@ -53,6 +57,9 @@ Without it, when `inotifywait` or `ip monitor` restarts, the FIFO has no writers
 
 ### Why Directory Watch (`/etc/agentic-route/`)?
 `vim` and editors write to a temp file then `rename()` over the target. A file watch on `intent.json` tracks the old inode and misses the new file. Directory watch catches `moved_to` events on the directory itself.
+
+### Why 60s Reconcile Delay?
+AI agents (including this daemon's reconciler) may make transient routing changes during normal operation. A 60-second delay (configurable via `AGENTIC_ROUTE_RECONCILE_DELAY`) acts as a safeguard window: the daemon waits this many seconds after the last event before reconciling, allowing agents to complete their changes without the daemon racing to undo them. Set to 0 to disable.
 
 ### Why 200ms Debounce?
 VPN reconnects, DHCP renewals, and link changes fire 20-50 Netlink events in <100ms. Without debouncing, the daemon would fork `ip`, `jq`, and shell subshells 50 times, pegging CPU and fighting interface state mid-transition.
@@ -69,4 +76,3 @@ trap 'exec 3>&-; kill $(jobs -p) 2>/dev/null; rm -f "$FIFO"' EXIT INT TERM
 - `exec 3>&-` closes the held FD, allowing FIFO to drain
 - `kill $(jobs -p)` reaps background `inotifywait` and `ip monitor`
 - `rm -f "$FIFO"` cleans up the pipe file
-
