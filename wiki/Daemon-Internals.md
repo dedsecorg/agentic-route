@@ -40,11 +40,9 @@ while read -r event <&3; do
       ;;
   esac
   
-  if "$RECONCILE_BIN"; then
-    :  # clean, no drift
-  else
-    log "drift corrected"
-  fi
+  # Reconcile returns 0 (clean) or 1 (drift corrected); both are normal.
+  # `set -e` would kill the daemon on exit 1, so suppress non-zero exit.
+  "$RECONCILE_BIN" || true
 done
 ```
 
