@@ -4,7 +4,10 @@
 # agentic-route-daemon - event-driven reconciler with FIFO multiplexing
 # Watches the intent file (AGENTIC_ROUTE_INTENT, default /etc/agentic-route/intent.json)
 # via inotify on its directory, plus kernel routing (ip monitor)
-# Runs agentic-route-reconcile on events with 200ms debounce
+# Runs agentic-route-reconcile on events with configurable delay (default 60s)
+# The delay acts as a safeguard window: AI agents can make multiple routing
+# changes without the daemon racing to undo them. Only after the delay elapses
+# with no further events does reconciliation fire.
 
 set -eo pipefail
 
@@ -15,11 +18,28 @@ INTENT_DIR="$(dirname "$INTENT_FILE")"
 INTENT_NAME="$(basename "$INTENT_FILE")"
 RECONCILE_BIN="/usr/local/bin/agentic-route-reconcile"
 
+# Configurable delay (seconds) before reconciling after the last event.
+# This gives AI agents time to complete their routing changes before
+# the daemon corrects drifts. Set to 0 to disable the safeguard.
+RECONCILE_DELAY="${AGENTIC_ROUTE_RECONCILE_DELAY:-60}"
+
 mkdir -p "$RUN_DIR" "$INTENT_DIR"
 [[ -p "$FIFO" ]] || mkfifo "$FIFO"
 
-# Clean up children and FIFO on exit
-trap 'exec 3>&-; kill $(jobs -p) 2>/dev/null; rm -f "$FIFO"' EXIT INT TERM
+# Clean up children, FIFO, and timer on exit
+cleanup() {
+  [ -n "${reconcile_timer_pid:-}" ] && kill "$reconcile_timer_pid" 2>/dev/null || true
+  exec 3>&- 3<&-
+  kill $(jobs -p) 2>/dev/null || true
+  rm -f "$FIFO"
+}
+trap cleanup EXIT INT TERM
+
+# One-shot reconciliation triggered by the timer
+run_reconcile() {
+  ar_log "delay timer elapsed, running reconciliation"
+  "$RECONCILE_BIN" || true
+}
 
 # Stream 1: Intent file changes (directory watch survives vim atomic rename)
 inotifywait -m -q -e close_write,moved_to --format '%f' "$INTENT_DIR/" > "$FIFO" 2>/dev/null &
@@ -30,26 +50,60 @@ ip monitor rule route link 2>/dev/null > "$FIFO" &
 # Hold FIFO open on FD 3 so it never receives EOF when writers restart
 exec 3<> "$FIFO"
 
-ar_log() { echo "[agentic-route-daemon] $*" >&2; }
-ar_log "daemon started, watching $INTENT_FILE and kernel netlink"
+ar_log() { echo "[agentic-route-daemon] $* $INTENT_NAME and kernel netlink" >&2; }
+ar_log "daemon started, watching for routing events (reconcile delay: ${RECONCILE_DELAY}s)"
+
+# Track whether the timer is currently pending
+timer_pending=false
+
+# Cancel any pending reconciliation timer
+cancel_timer() {
+  if [ -n "${reconcile_timer_pid:-}" ]; then
+    kill "$reconcile_timer_pid" 2>/dev/null || true
+    wait "$reconcile_timer_pid" 2>/dev/null || true
+    reconcile_timer_pid=""
+  fi
+  timer_pending=false
+}
+
+# Schedule reconciliation after RECONCILE_DELAY seconds.
+# If a timer is already pending, it gets reset (cancels the old, starts new).
+schedule_reconcile() {
+  cancel_timer
+  if [ "$RECONCILE_DELAY" -eq 0 ]; then
+    run_reconcile
+  else
+    # Use a subshell that sleeps then triggers reconciliation
+    (
+      sleep "$RECONCILE_DELAY"
+      ar_log "delay timer elapsed, running reconciliation"
+      "$RECONCILE_BIN" || true
+    ) &
+    reconcile_timer_pid=$!
+    timer_pending=true
+  fi
+}
 
 # Unified debounced loop reading strictly from FD 3
 while read -r event <&3; do
-  # Drain burst events (200ms window)
-  while read -r -t 0.2 -u 3 _; do :; done
-  
+  # Drain burst events within a 200ms window
+  while read -r -t 0.2 -u 3 _; do
+    :
+  done
+
   case "$event" in
     "$INTENT_NAME")
       ar_log "intent file changed: $event"
       ;;
     *)
-      ar_log "kernel routing event"
+      ar_log "kernel routing event detected"
       ;;
   esac
-  
-  # Run idempotent reconciliation (exit 1 = drift corrected, not an error)
-  "$RECONCILE_BIN" || true
+
+  # Schedule reconciliation with delay (acts as safeguard window)
+  schedule_reconcile
 done
 
-ar_log "daemon stopped"
-
+cleanup
+ar_log "daemon stopped" 2>&1
+ar_log "daemon stopped" >&2
