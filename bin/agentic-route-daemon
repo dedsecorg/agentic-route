@@ -35,10 +35,19 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-# One-shot reconciliation triggered by the timer
-run_reconcile() {
-  ar_log "delay timer elapsed, running reconciliation"
-  "$RECONCILE_BIN" || true
+ar_log() { echo "[agentic-route-daemon] $*" >&2; }
+
+# Run reconciliation, handling exit codes consistently:
+#   0 = no drift, all good
+#   1 = drift corrected (normal)
+#   2+ = error (log it)
+reconcile() {
+  "$RECONCILE_BIN" 2>&1
+  local rc=$?
+  if [ "$rc" -gt 1 ]; then
+    ar_log "reconcile exited with error (exit $rc)"
+  fi
+  return 0
 }
 
 # Stream 1: Intent file changes (directory watch survives vim atomic rename)
@@ -50,11 +59,11 @@ ip monitor rule route link 2>/dev/null > "$FIFO" &
 # Hold FIFO open on FD 3 so it never receives EOF when writers restart
 exec 3<> "$FIFO"
 
-ar_log() { echo "[agentic-route-daemon] $* $INTENT_NAME and kernel netlink" >&2; }
 ar_log "daemon started, watching for routing events (reconcile delay: ${RECONCILE_DELAY}s)"
 
 # Track whether the timer is currently pending
 timer_pending=false
+reconcile_timer_pid=""
 
 # Cancel any pending reconciliation timer
 cancel_timer() {
@@ -71,13 +80,14 @@ cancel_timer() {
 schedule_reconcile() {
   cancel_timer
   if [ "$RECONCILE_DELAY" -eq 0 ]; then
-    run_reconcile
+    ar_log "running reconciliation (delay disabled)"
+    reconcile
   else
     # Use a subshell that sleeps then triggers reconciliation
     (
       sleep "$RECONCILE_DELAY"
       ar_log "delay timer elapsed, running reconciliation"
-      "$RECONCILE_BIN" || true
+      reconcile
     ) &
     reconcile_timer_pid=$!
     timer_pending=true
@@ -105,5 +115,4 @@ while read -r event <&3; do
 done
 
 cleanup
-ar_log "daemon stopped" 2>&1
-ar_log "daemon stopped" >&2
+ar_log "daemon stopped"
